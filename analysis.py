@@ -227,6 +227,12 @@ hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
 # Count hits in each event
 hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
 
+# Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
+from modules.mapping import *
+mapconverter = Mapping()
+mapconverter.virtex7(hits)
+
+'''
 hits.loc[(hits['FPGA'] == 0) & (hits['TDC_CHANNEL'] <= NCHANNELS), 'SL'] = 0
 hits.loc[(hits['FPGA'] == 0) & (hits['TDC_CHANNEL'] > NCHANNELS) & (hits['TDC_CHANNEL'] <= 2*NCHANNELS), 'SL'] = 1
 hits.loc[(hits['FPGA'] == 1) & (hits['TDC_CHANNEL'] <= NCHANNELS), 'SL'] = 2
@@ -251,6 +257,9 @@ hits.loc[hits['TDC_CHANNEL'] % 4 == 0, 'Z_POS'] = posshift_z[3]
 hits['TDC_CHANNEL_NORM'] = ( hits['TDC_CHANNEL'] - NCHANNELS*(hits['SL']%2) ).astype(np.uint8) # TDC_CHANNEL from 0 to 127 -> TDC_CHANNEL_NORM from 0 to 63
 hits['WIRE_NUM'] = ( (hits['TDC_CHANNEL_NORM'] - 1) / 4 + 1 ).astype(np.uint8)
 hits['WIRE_POS'] = (hits['WIRE_NUM'] - 1)*XCELL + hits['X_POSSHIFT']
+'''
+
+
 
 hits['X_LEFT']  = hits['WIRE_POS'] - np.maximum(hits['TDRIFT'], 0)*VDRIFT
 hits['X_RIGHT'] = hits['WIRE_POS'] + np.maximum(hits['TDRIFT'], 0)*VDRIFT
