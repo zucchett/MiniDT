@@ -9,15 +9,18 @@ import optparse
 usage = "usage: %prog [options]"
 parser = optparse.OptionParser(usage)
 parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="LNL/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
-parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./", help="Specify output directory")
+parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_option("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
 parser.add_option("-x", "--meantimer", action="store_true", default=False, dest="meantimer", help="Force application of the meantimer algorithm (override BX assignment)")
 parser.add_option("-v", "--verbose", action="store_true", default=False, dest="verbose", help="Increase verbosity")
 (options, args) = parser.parse_args()
 
+runname = [x for x in options.filename.split('/') if 'Run' in x][0] if "Run" in options.filename else "Run000000"
+
 if not os.path.exists(options.outputdir): os.makedirs(options.outputdir)
-if not os.path.exists(options.outputdir + "plots/"): os.makedirs(options.outputdir + "plots/")
-if not os.path.exists(options.outputdir + "events/"): os.makedirs(options.outputdir + "events/")
+if not os.path.exists(options.outputdir + runname + "_plots/"): os.makedirs(options.outputdir + runname + "_plots/")
+if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(options.outputdir + runname + "_events/")
+
 
 # Layer    # Parameters
 
@@ -253,7 +256,7 @@ hits['X_LEFT']  = hits['WIRE_POS'] - np.maximum(hits['TDRIFT'], 0)*VDRIFT
 hits['X_RIGHT'] = hits['WIRE_POS'] + np.maximum(hits['TDRIFT'], 0)*VDRIFT
 #hits['X_POS_DELTA'] = np.abs(hits['X_POS_RIGHT'] -hits['X_POS_LEFT'])
 
-# Comatic changes to be compliant to common format
+# Cosmetic changes to be compliant to common format
 hits = hits.astype({'SL' : 'int8', 'LAYER' : 'int8'})
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
@@ -263,7 +266,7 @@ if options.verbose: print hits[hits['TDC_CHANNEL'] >= -128].head(50)
 # General plots
 import matplotlib.pyplot as plt
 
-if options.verbose: print("Writing plots in directory %s" % (options.outputdir))
+if options.verbose: print("Writing plots in directory %s" % (options.outputdir + runname))
 
 # Timebox
 plt.figure(figsize=(15,10))
@@ -273,8 +276,8 @@ for chamber in range(4):
     plt.title("Timebox [chamber %d]" % chamber)
     plt.xlabel("Time (ns)")
     plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(options.outputdir + "/plots/timebox.png")
-plt.savefig(options.outputdir + "/plots/timebox.pdf")
+plt.savefig(options.outputdir + runname + "_plots/timebox.png")
+plt.savefig(options.outputdir + runname + "_plots/timebox.pdf")
 
 
 # Space boxes
@@ -285,8 +288,8 @@ for chamber in range(4):
     plt.title("Space box LEFT [chamber %d]" % chamber)
     plt.xlabel("Position (mm)")
     plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(options.outputdir + "/plots/spacebox_left.png")
-plt.savefig(options.outputdir + "/plots/spacebox_left.pdf")
+plt.savefig(options.outputdir + runname + "_plots/spacebox_left.png")
+plt.savefig(options.outputdir + runname + "_plots/spacebox_left.pdf")
 
 plt.figure(figsize=(15,10))
 for chamber in range(4):
@@ -295,8 +298,8 @@ for chamber in range(4):
     plt.title("Space box RIGHT [chamber %d]" % chamber)
     plt.xlabel("Position (mm)")
     plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(options.outputdir + "/plots/spacebox_right.png")
-plt.savefig(options.outputdir + "/plots/spacebox_right.pdf")
+plt.savefig(options.outputdir + runname + "_plots/spacebox_right.png")
+plt.savefig(options.outputdir + runname + "_plots/spacebox_right.pdf")
 
 
 # Occupancy
@@ -310,8 +313,8 @@ for chamber in range(4):
     plt.title("Occupancy [chamber %d]" % chamber)
     plt.xlabel("Channel")
     plt.bar(x, y)
-plt.savefig(options.outputdir + "/plots/occupancy.png")
-plt.savefig(options.outputdir + "/plots/occupancy.pdf")
+plt.savefig(options.outputdir + runname + "_plots/occupancy.png")
+plt.savefig(options.outputdir + runname + "_plots/occupancy.pdf")
 
 
 
@@ -462,10 +465,13 @@ for orbit, hitlist in events:
     if True: #args.plot:
         plots = [[figs['sl'][l]] for l in [3, 1, 2, 0]]
         plots.append([figs['global'][v] for v in ['xz', 'yz']])
-        bokeh.io.output_file(options.outputdir + "/events/orbit_%d.html" % orbit, mode='cdn')
+        bokeh.io.output_file(options.outputdir + runname + "_events/orbit_%d.html" % orbit, mode='cdn')
         bokeh.io.save(bokeh.layouts.layout(plots))
 
 #print ev.head(60)
 
 if options.verbose: print("Done.")
 
+
+
+# python analysis.py -i LNL/Run000966/output_raw.dat -m 1 -v
