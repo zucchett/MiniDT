@@ -34,7 +34,6 @@ if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(opt
 # 4           |  4  |  8  |  12 | 16 ...
 #          +--+--+--+--+--+--+
 
-
 DURATION = {                         
     'orbit:bx': 3564,
     'orbit': 3564*25,
@@ -42,7 +41,13 @@ DURATION = {
     'tdc': 25./30
 }
 
+
 TIME_WINDOW = (-50, 500)
+'''
+XCELL     = 42.                      # cell width in mm
+TDRIFT    = 15.6*DURATION['bx']    # drift time in ns
+VDRIFT    = XCELL*0.5 / TDRIFT     # drift velocity in mm/ns 
+
 
 ### Chamber configuration
 NCHANNELS  = 64    # channels per SL
@@ -161,7 +166,7 @@ def unpacker(hit):
         
     return rows
 
-
+'''
 def meanTimer(obj):
     #print len(obj), obj.values
     return obj.sum()
@@ -169,18 +174,26 @@ def meanTimer(obj):
 
 ### Open file ###
 
+
+
 if options.filename.endswith('.dat'):
+    from modules.unpacker import *
+    unpk = Unpacker()
+    inputFile = open(options.filename, 'rb')
+    dt = unpk.unpack(inputFile, options.max)
+    '''
     dt = []
     word_count = 0
-    inputFile = open(options.filename, 'rb')
+    
     while (word_count < 0 or word_count < options.max):
         word = inputFile.read(num_words*word_size)
         if word:
-              d = unpacker(word)
+              d = unpk.unpacker(word)
               dt += d
               word_count += 1
               #print len(dt)
         else: break
+    '''
 
     if options.verbose: print("Read %d lines from binary file %s" % (len(dt), options.filename))
     df = pd.DataFrame.from_dict(dt)
@@ -229,8 +242,10 @@ hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
 
 # Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
 from modules.mapping import *
+
 mapconverter = Mapping()
 mapconverter.virtex7(hits)
+mapconverter.addXleftright(hits)
 
 '''
 hits.loc[(hits['FPGA'] == 0) & (hits['TDC_CHANNEL'] <= NCHANNELS), 'SL'] = 0
@@ -257,13 +272,14 @@ hits.loc[hits['TDC_CHANNEL'] % 4 == 0, 'Z_POS'] = posshift_z[3]
 hits['TDC_CHANNEL_NORM'] = ( hits['TDC_CHANNEL'] - NCHANNELS*(hits['SL']%2) ).astype(np.uint8) # TDC_CHANNEL from 0 to 127 -> TDC_CHANNEL_NORM from 0 to 63
 hits['WIRE_NUM'] = ( (hits['TDC_CHANNEL_NORM'] - 1) / 4 + 1 ).astype(np.uint8)
 hits['WIRE_POS'] = (hits['WIRE_NUM'] - 1)*XCELL + hits['X_POSSHIFT']
-'''
 
 
 
 hits['X_LEFT']  = hits['WIRE_POS'] - np.maximum(hits['TDRIFT'], 0)*VDRIFT
 hits['X_RIGHT'] = hits['WIRE_POS'] + np.maximum(hits['TDRIFT'], 0)*VDRIFT
 #hits['X_POS_DELTA'] = np.abs(hits['X_POS_RIGHT'] -hits['X_POS_LEFT'])
+'''
+
 
 # Cosmetic changes to be compliant to common format
 hits = hits.astype({'SL' : 'int8', 'LAYER' : 'int8'})
@@ -357,6 +373,7 @@ GLOBAL_VIEW_SLs = {
 }
 
 ev = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS']]
+
 
 # FIXME: SL 0 and 1 are swapped
 pd.options.mode.chained_assignment = None

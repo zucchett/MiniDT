@@ -11,6 +11,7 @@ class Mapping:
 
     '''Adds SL, LAYER, WIRE_NUM, WIRE_POS columns to dataframe according to the double Virtex7 setup'''
     def virtex7(self, hits):
+        # FIXME: SL 0 and 1 are swapped
         hits.loc[(hits['FPGA'] == 0) & (hits['TDC_CHANNEL'] <= config.NCHANNELS), 'SL'] = 0
         hits.loc[(hits['FPGA'] == 0) & (hits['TDC_CHANNEL'] > config.NCHANNELS) & (hits['TDC_CHANNEL'] <= 2*config.NCHANNELS), 'SL'] = 1
         hits.loc[(hits['FPGA'] == 1) & (hits['TDC_CHANNEL'] <= config.NCHANNELS), 'SL'] = 2
@@ -37,3 +38,6 @@ class Mapping:
         hits['WIRE_POS'] = (hits['WIRE_NUM'] - 1)*config.XCELL + hits['X_POSSHIFT']
 
 
+    def addXleftright(self, hits):
+        hits['X_LEFT']  = hits['WIRE_POS'] - np.maximum(hits['TDRIFT'], 0)*config.VDRIFT
+        hits['X_RIGHT'] = hits['WIRE_POS'] + np.maximum(hits['TDRIFT'], 0)*config.VDRIFT
