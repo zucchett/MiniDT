@@ -8,7 +8,7 @@ import numpy as np
 import optparse
 usage = "usage: %prog [options]"
 parser = optparse.OptionParser(usage)
-parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="LNL/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
+parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="data/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
 parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_option("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
 parser.add_option("-x", "--meantimer", action="store_true", default=False, dest="meantimer", help="Force application of the meantimer algorithm (override BX assignment)")
@@ -500,4 +500,4 @@ if options.verbose: print("Done.")
 
 
 
-# python analysis.py -i LNL/Run000966/output_raw.dat -m 1 -v
+# python analysis.py -i data/Run000966/output_raw.dat -m 1 -v
