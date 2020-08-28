@@ -8,6 +8,7 @@ import numpy as np
 import optparse
 usage = "usage: %prog [options]"
 parser = optparse.OptionParser(usage)
+parser.add_option("-f", "--fast", action="store_true", default=False, dest="fast", help="Fast analysis, skip event display, create only summary plots")
 parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="data/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
 parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_option("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
@@ -244,7 +245,7 @@ hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
 from modules.mapping import *
 
 mapconverter = Mapping()
-mapconverter.virtex7(hits)
+mapconverter.virtex7lambda(hits)
 mapconverter.addXleftright(hits)
 
 '''
@@ -281,7 +282,13 @@ hits['X_RIGHT'] = hits['WIRE_POS'] + np.maximum(hits['TDRIFT'], 0)*VDRIFT
 '''
 
 
-# Cosmetic changes to be compliant to common format
+# FIXME: SL 0 and 1 are swapped
+pd.options.mode.chained_assignment = None
+hits.loc[hits['SL'] == 0, 'SL'] = -1
+hits.loc[hits['SL'] == 1, 'SL'] = 0
+hits.loc[hits['SL'] == -1, 'SL'] = 1
+
+# Cosmetic changes to be compliant with common format
 hits = hits.astype({'SL' : 'int8', 'LAYER' : 'int8'})
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
@@ -328,20 +335,21 @@ plt.savefig(options.outputdir + runname + "_plots/spacebox_right.pdf")
 
 
 # Occupancy
-plt.figure(figsize=(15,10))
-occupancy = hits.groupby(["CHAMBER", "TDC_CHANNEL_NORM"])['HEAD'].count() # count performed a random column
+plt.figure(figsize=(15,20))
+occupancy = hits.groupby(["CHAMBER", "LAYER", "WIRE"])['HEAD'].count() # count performed a random column
 occupancy = occupancy.reset_index().rename(columns={'HEAD' : 'COUNTS'}) # reset the indices and make new ones, because the old indices are needed for selection
 for chamber in range(4):
-    x = np.array( occupancy.loc[occupancy['CHAMBER'] == chamber, 'TDC_CHANNEL_NORM'] )
-    y = np.array( occupancy.loc[occupancy['CHAMBER'] == chamber, 'COUNTS'] )
-    plt.subplot(2, 2, chamber+1)
-    plt.title("Occupancy [chamber %d]" % chamber)
-    plt.xlabel("Channel")
-    plt.bar(x, y)
+    for layer in range(4):
+        x = np.array( occupancy.loc[((occupancy['CHAMBER'] == chamber) & (occupancy['LAYER'] == layer+1)), 'WIRE'] )
+        y = np.array( occupancy.loc[((occupancy['CHAMBER'] == chamber) & (occupancy['LAYER'] == layer+1)), 'COUNTS'] )
+        plt.subplot(4, 4, chamber*4 + layer + 1)
+        plt.title("Occupancy [SL %d, LAYER %d]" % (chamber, layer+1))
+        plt.xlabel("Wire number")
+        plt.bar(x, y)
 plt.savefig(options.outputdir + runname + "_plots/occupancy.png")
 plt.savefig(options.outputdir + runname + "_plots/occupancy.pdf")
 
-
+if options.fast: exit()
 
 # Event display
 from pdb import set_trace as br
@@ -374,14 +382,6 @@ GLOBAL_VIEW_SLs = {
 
 ev = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS']]
 
-
-# FIXME: SL 0 and 1 are swapped
-pd.options.mode.chained_assignment = None
-ev.loc[ev['CHAMBER'] == 0, 'CHAMBER'] = -1
-ev.loc[ev['CHAMBER'] == 1, 'CHAMBER'] = 0
-ev.loc[ev['CHAMBER'] == -1, 'CHAMBER'] = 1
-
-
 events = ev.groupby(['ORBIT'])
 # Loop on events (same orbit)
 for orbit, hitlist in events:
@@ -404,7 +404,7 @@ for orbit, hitlist in events:
     sl_fit_results = {}
     
     for iSL, sl in SLs.items():
-        # print('- SL', iSL)
+        
         hits_sl = H.hits.loc[H.hits['sl'] == iSL].sort_values('layer')
 
         if True: #args.plot:
@@ -489,7 +489,7 @@ for orbit, hitlist in events:
 
     # Storing the figures to an HTML file
     if True: #args.plot:
-        plots = [[figs['sl'][l]] for l in [3, 1, 2, 0]]
+        plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
         plots.append([figs['global'][v] for v in ['xz', 'yz']])
         bokeh.io.output_file(options.outputdir + runname + "_events/orbit_%d.html" % orbit, mode='cdn')
         bokeh.io.save(bokeh.layouts.layout(plots))
