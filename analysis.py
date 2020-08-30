@@ -4,6 +4,11 @@
 import os
 import pandas as pd
 import numpy as np
+import itertools
+
+from modules.analysis.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW
+from modules.mapping import *
+from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, meantimereq, mean_tzero, tzero_clusters
 
 import optparse
 usage = "usage: %prog [options]"
@@ -35,166 +40,84 @@ if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(opt
 # 4           |  4  |  8  |  12 | 16 ...
 #          +--+--+--+--+--+--+
 
-DURATION = {                         
-    'orbit:bx': 3564,
-    'orbit': 3564*25,
-    'bx': 25.,
-    'tdc': 25./30
-}
 
-
-TIME_WINDOW = (-50, 500)
-'''
-XCELL     = 42.                      # cell width in mm
-TDRIFT    = 15.6*DURATION['bx']    # drift time in ns
-VDRIFT    = XCELL*0.5 / TDRIFT     # drift velocity in mm/ns 
-
-
-### Chamber configuration
-NCHANNELS  = 64    # channels per SL
-NSL        = 4     # number of SL
-### Cell parameters
-XCELL     = 42.                      # cell width in mm
-ZCELL     = 13.                      # cell height in mm
-ZCHAMB    = 550.                     # spacing betweeen chambers in mm
-
-TDRIFT    = 15.6*DURATION['bx']    # drift time in ns
-VDRIFT    = XCELL*0.5 / TDRIFT     # drift velocity in mm/ns 
-
-layer_z     = [  1,            3,            2,            4,         ]
-chanshift_x = [  0,            -1,           0,            -1,        ]
-posshift_z  = [  ZCELL*1.5,    -ZCELL*0.5,   ZCELL*0.5,    -ZCELL*1.5 ]
-posshift_x  = [  -7.5*XCELL,   -7.5*XCELL,   -7.0*XCELL,   -7.0*XCELL ]
-
-
-# Unpacker
-import struct
-
-word_size = 8 # one 64-bit word
-num_words = 128 + 1 # 1 DMA data transfer = 1 kB = 1024 B = 128 words (hits)
-
-def hit_unpacker(word):
-    # hit masks
-    hmaskTDC_MEAS     = 0x1F
-    hmaskBX_COUNTER   = 0xFFF
-    hmaskORBIT_CNT    = 0xFFFFFFFF
-    hmaskTDC_CHANNEL  = 0x1FF
-    hmaskFPGA         = 0xF
-    hmaskHEAD         = 0x3
-
-    hfirstTDC_MEAS    = 0
-    hfirstBX_COUNTER  = 5
-    hfirstORBIT_CNT   = 17
-    hfirstTDC_CHANNEL = 49
-    hfirstFPGA        = 58
-    hfirstHEAD        = 62
-    
-    TDC_MEAS     =      int(( word >> hfirstTDC_MEAS    ) & hmaskTDC_MEAS   )
-    BX_COUNTER   =      int(( word >> hfirstBX_COUNTER  ) & hmaskBX_COUNTER )
-    ORBIT_CNT    =      int(( word >> hfirstORBIT_CNT   ) & hmaskORBIT_CNT  )
-    TDC_CHANNEL  =  1 + int(( word >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL)
-    FPGA         =      int(( word >> hfirstFPGA        ) & hmaskFPGA       )
-    HEAD         =      int(( word >> hfirstHEAD        ) & hmaskHEAD       )
-    
-    if((TDC_CHANNEL!=137) and (TDC_CHANNEL!=138)):
-            TDC_MEAS -= 1
-
-    unpacked  = {
-        'HEAD': HEAD,
-        'FPGA': FPGA,
-        'TDC_CHANNEL': TDC_CHANNEL,
-        'ORBIT_CNT': ORBIT_CNT,
-        'BX_COUNTER': BX_COUNTER,
-        'TDC_MEAS': TDC_MEAS,
-        'TRG_QUALITY': np.NaN
-    }
-    
-    return unpacked #Row(**unpacked)
-
-def trigger_unpacker(word):
-    # Trigger masks
-    tmaskQUAL    = 0x0000000000000001
-    tmaskBX      = 0x0000000000001FFE
-    tmaskTAGBX   = 0x0000000001FFE000
-    tmaskTAGORB  = 0x01FFFFFFFE000000
-    tmaskMCELL   = 0x0E00000000000000
-    tmaskSL      = 0x3000000000000000
-    tmaskHEAD    = 0xC000000000000000
-
-    tfirstQUAL   = 0
-    tfirstBX     = 1
-    tfirstTAGBX  = 13
-    tfirstTAGORB = 25
-    tfirstMCELL  = 57
-    tfirstSL     = 60
-    tfirstHEAD   = 62
-    
-    storedTrigHead     = int(( word & tmaskHEAD   ) >> tfirstHEAD  )
-    storedTrigMiniCh   = int(( word & tmaskSL     ) >> tfirstSL    )
-    storedTrigMCell    = int(( word & tmaskMCELL  ) >> tfirstMCELL )
-    storedTrigTagOrbit = int(( word & tmaskTAGORB ) >> tfirstTAGORB)
-    storedTrigTagBX    = int(( word & tmaskTAGBX  ) >> tfirstTAGBX )
-    storedTrigBX       = int(( word & tmaskBX     ) >> tfirstBX    )
-    storedTrigQual     = int(( word & tmaskQUAL   ) >> tfirstQUAL  )
-    
-    unpacked = {
-        'HEAD': storedTrigHead,
-        'FPGA': storedTrigMiniCh,
-        'TDC_CHANNEL': storedTrigMCell,
-        'ORBIT_CNT': storedTrigTagOrbit,
-        'BX_COUNTER': storedTrigTagBX,
-        'TDC_MEAS': storedTrigBX,
-        'TRG_QUALITY': storedTrigQual
-    }
-    
-    return unpacked #Row(**unpacked)
-
-
-def unpacker(hit):
-    
-    rows = []
-    
-    for i in range(0, num_words*word_size, word_size):
-        
-        buffer = struct.unpack('<Q', hit[i:i+word_size])[0]
-        head = (buffer >> 62) & 0x3
-        
-        if head == 1 or head == 2:
-            rows.append(hit_unpacker(buffer))
-
-        elif head == 3:
-            rows.append(trigger_unpacker(buffer))
-        
-    return rows
-
-'''
 def meanTimer(obj):
-    #print len(obj), obj.values
-    return obj.sum()
+    print obj
+    #return obj.sum()
+
+    #print group
+    '''
+    df = df.loc[df['SL']==sl+1]
+    adf = df.drop_duplicates()
+    adf = adf.loc[(adf['TDC_CHANNEL']!=139)]
+    if adf.shape[0] < CHAN_PER_DF:
+    out[event+sl/10.] = []
+    return out[event+sl/10.]
+    tzeros = meantimer_results(adf)[0]
+    out[event+sl/10.] = tzeros
+    return out[event+sl/10.]
+    '''
+
+
+def meantimer_results(df_hits, verbose=False):
+    """Run meantimer over the group of hits"""
+    sl = df_hits['SL'].iloc[0]
+    # Getting a TIME column as a Series with TDC_CHANNEL_NORM as index
+    df_time = df_hits.loc[:, ['TDC_CHANNEL_NORM', 'TIME_ABS', 'LAYER']]
+    df_time.sort_values('TIME_ABS', inplace=True)
+    # Split hits in groups where time difference is larger than maximum event duration
+    grp = df_time['TIME_ABS'].diff().fillna(0)
+    event_width_max = 1.1*TDRIFT
+    grp[grp <= event_width_max] = 0
+    grp[grp > 0] = 1
+    grp = grp.cumsum().astype(np.uint16)
+    df_time['grp'] = grp
+    # Removing groups with less than 3 unique hits
+    df_time = df_time[df_time.groupby('grp')['TDC_CHANNEL_NORM'].transform('nunique') >= 3]
+    # Determining the TIME0 using triplets [no external trigger]
+    tzeros = []
+    angles = []
+    # Processing each group of hits
+    patterns = PATTERN_NAMES.keys()
+    for grp, df_grp in df_time.groupby('grp'):
+        df_grp.set_index('TDC_CHANNEL_NORM', inplace=True)
+        # Selecting only triplets present among physically meaningful hit patterns
+        channels = set(df_grp.index.astype(np.int16))
+        triplets = set(itertools.permutations(channels, 3))
+        triplets = triplets.intersection(patterns)
+        # Grouping hits by the channel for quick triplet retrieval
+        times = df_grp.groupby(df_grp.index)['TIME_ABS']
+        # Analysing each triplet
+        for triplet in triplets:
+            triplet_times = [times.get_group(ch).values for ch in triplet]
+            for t1 in triplet_times[0]:
+                for t2 in triplet_times[1]:
+                    for t3 in triplet_times[2]:
+                        timetriplet = (t1, t2, t3)
+                        if max(timetriplet) - min(timetriplet) > 1.1*TDRIFT:
+                            continue
+                        pattern = PATTERN_NAMES[triplet]
+                        mean_time, angle = meantimereq(pattern, timetriplet)
+                        if verbose:
+                            print('{4:d} {0:s}: {1:.0f}  {2:+.2f}  {3}'.format(pattern, mean_time, angle, triplet, sl))
+                        # print(triplet, pattern, mean_time, angle)
+                        #if not MEANTIMER_ANGLES[sl][0] < angle < MEANTIMER_ANGLES[sl][1]: FIXME
+                        #    continue
+                        tzeros.append(mean_time)
+                        angles.append(angle)
+
+    return tzeros, angles
+
+
 
 
 ### Open file ###
-
-
 
 if options.filename.endswith('.dat'):
     from modules.unpacker import *
     unpk = Unpacker()
     inputFile = open(options.filename, 'rb')
     dt = unpk.unpack(inputFile, options.max)
-    '''
-    dt = []
-    word_count = 0
-    
-    while (word_count < 0 or word_count < options.max):
-        word = inputFile.read(num_words*word_size)
-        if word:
-              d = unpk.unpacker(word)
-              dt += d
-              word_count += 1
-              #print len(dt)
-        else: break
-    '''
 
     if options.verbose: print("Read %d lines from binary file %s" % (len(dt), options.filename))
     df = pd.DataFrame.from_dict(dt)
@@ -220,20 +143,46 @@ if options.verbose: print df.head(50)
 # remove tdc_channel = 139 since they are not physical events
 df = df.loc[ df['TDC_CHANNEL']!=139 ]
 
-df['T0'] = df[df['HEAD']==3].groupby('ORBIT_CNT')['TDC_MEAS'].transform(np.min)
-df['T0'] = df.groupby('ORBIT_CNT')['T0'].transform(np.max)
 
-sparhits = df.loc[df['T0'].isnull()].copy()
-trighits = df.loc[df['T0'] >= 0].copy()
-hits = trighits.loc[df['HEAD']==1].copy()
+# Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
+mapconverter = Mapping()
+df = mapconverter.virtex7lambda(df)
 
+
+# Determine BX0 either using meantimer or the trigger BX assignment
 if options.meantimer: # still to be developed
     if options.verbose: print("Running meantimer")
-    hits['T0'] = hits.groupby('ORBIT_CNT')['TDC_MEAS'].transform(meanTimer)
+    
+    # Use only hits
+    df = df[df['HEAD']==1]
+    
+    # Add necessary columns
+    df['TDC_CHANNEL_NORM'] = (df['TDC_CHANNEL'] - 64 * (df['SL']%2)).astype(np.uint8)
+    df['TIME_ABS'] = (df['ORBIT_CNT'].astype(np.float64)*DURATION['orbit'] + df['BX_COUNTER'].astype(np.float64)*DURATION['bx'] + df['TDC_MEAS'].astype(np.float64)*DURATION['tdc']).astype(np.float64)
 
+    # Group by orbit counter (event) and SL
+    grpbyorbit = df.groupby(['ORBIT_CNT', 'SL'])
+    for (iorbit, isl), adf in grpbyorbit:
+        adf = adf.drop_duplicates() 
+        tzeros = meantimer_results(adf)[0]
+        if len(tzeros) > 0: df.loc[(df['ORBIT_CNT'] == iorbit) & (df['SL'] == isl), 'T0'] = np.mean(tzeros)
+    
+    # Calculate drift time
+    hits = df[df['T0'].notna()].copy()
+    hits['TDRIFT'] = (hits['TIME_ABS'] - hits['T0']).astype(np.float32)
 
-# Create column TDRIFT
-hits['TDRIFT'] = (hits['BX_COUNTER']-hits['T0'])*DURATION['bx'] + hits['TDC_MEAS']*DURATION['tdc']
+else:
+    # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
+    df['T0'] = df[df['HEAD']==3].groupby('ORBIT_CNT')['TDC_MEAS'].transform(np.min)
+    df['T0'] = df.groupby('ORBIT_CNT')['T0'].transform(np.max)
+
+    # Select only valid hits
+    sparhits = df.loc[df['T0'].isnull()].copy()
+    trighits = df.loc[df['T0'] >= 0].copy()
+    hits = trighits.loc[df['HEAD']==1].copy()
+
+    # Create column TDRIFT
+    hits['TDRIFT'] = (hits['BX_COUNTER']-hits['T0'])*DURATION['bx'] + hits['TDC_MEAS']*DURATION['tdc']
 
 # Find events
 hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
@@ -241,45 +190,8 @@ hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
 # Count hits in each event
 hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
 
-# Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
-from modules.mapping import *
-
-mapconverter = Mapping()
-mapconverter.virtex7lambda(hits)
+# Conversion from time to position
 mapconverter.addXleftright(hits)
-
-'''
-hits.loc[(hits['FPGA'] == 0) & (hits['TDC_CHANNEL'] <= NCHANNELS), 'SL'] = 0
-hits.loc[(hits['FPGA'] == 0) & (hits['TDC_CHANNEL'] > NCHANNELS) & (hits['TDC_CHANNEL'] <= 2*NCHANNELS), 'SL'] = 1
-hits.loc[(hits['FPGA'] == 1) & (hits['TDC_CHANNEL'] <= NCHANNELS), 'SL'] = 2
-hits.loc[(hits['FPGA'] == 1) & (hits['TDC_CHANNEL'] > NCHANNELS) & (hits['TDC_CHANNEL'] <= 2*NCHANNELS), 'SL'] = 3
-
-hits.loc[hits['TDC_CHANNEL'] % 4 == 1, 'LAYER'] = 1
-hits.loc[hits['TDC_CHANNEL'] % 4 == 2, 'LAYER'] = 3
-hits.loc[hits['TDC_CHANNEL'] % 4 == 3, 'LAYER'] = 2
-hits.loc[hits['TDC_CHANNEL'] % 4 == 0, 'LAYER'] = 4
-
-hits.loc[hits['TDC_CHANNEL'] % 4 == 1, 'X_POSSHIFT'] = posshift_x[0]
-hits.loc[hits['TDC_CHANNEL'] % 4 == 2, 'X_POSSHIFT'] = posshift_x[1]
-hits.loc[hits['TDC_CHANNEL'] % 4 == 3, 'X_POSSHIFT'] = posshift_x[2]
-hits.loc[hits['TDC_CHANNEL'] % 4 == 0, 'X_POSSHIFT'] = posshift_x[3]
-
-hits.loc[hits['TDC_CHANNEL'] % 4 == 1, 'Z_POS'] = posshift_z[0]
-hits.loc[hits['TDC_CHANNEL'] % 4 == 2, 'Z_POS'] = posshift_z[1]
-hits.loc[hits['TDC_CHANNEL'] % 4 == 3, 'Z_POS'] = posshift_z[2]
-hits.loc[hits['TDC_CHANNEL'] % 4 == 0, 'Z_POS'] = posshift_z[3]
-
-
-hits['TDC_CHANNEL_NORM'] = ( hits['TDC_CHANNEL'] - NCHANNELS*(hits['SL']%2) ).astype(np.uint8) # TDC_CHANNEL from 0 to 127 -> TDC_CHANNEL_NORM from 0 to 63
-hits['WIRE_NUM'] = ( (hits['TDC_CHANNEL_NORM'] - 1) / 4 + 1 ).astype(np.uint8)
-hits['WIRE_POS'] = (hits['WIRE_NUM'] - 1)*XCELL + hits['X_POSSHIFT']
-
-
-
-hits['X_LEFT']  = hits['WIRE_POS'] - np.maximum(hits['TDRIFT'], 0)*VDRIFT
-hits['X_RIGHT'] = hits['WIRE_POS'] + np.maximum(hits['TDRIFT'], 0)*VDRIFT
-#hits['X_POS_DELTA'] = np.abs(hits['X_POS_RIGHT'] -hits['X_POS_LEFT'])
-'''
 
 
 # FIXME: SL 0 and 1 are swapped
@@ -289,7 +201,6 @@ hits.loc[hits['SL'] == 1, 'SL'] = 0
 hits.loc[hits['SL'] == -1, 'SL'] = 1
 
 # Cosmetic changes to be compliant with common format
-hits = hits.astype({'SL' : 'int8', 'LAYER' : 'int8'})
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
 if options.verbose: print hits[hits['TDC_CHANNEL'] >= -128].head(50)
