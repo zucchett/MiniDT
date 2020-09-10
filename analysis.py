@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import os
+import os, sys, math
 import pandas as pd
 import numpy as np
 import itertools
@@ -13,6 +13,7 @@ from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNE
 import optparse
 usage = "usage: %prog [options]"
 parser = optparse.OptionParser(usage)
+parser.add_option("-e", "--eventdisplay", action="store_true", default=False, dest="eventdisplay", help="Run event display (loop on events, takes time)")
 parser.add_option("-f", "--fast", action="store_true", default=False, dest="fast", help="Fast analysis, skip event display, create only summary plots")
 parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="data/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
 parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./output/", help="Specify output directory")
@@ -26,6 +27,12 @@ runname = [x for x in options.filename.split('/') if 'Run' in x][0] if "Run" in 
 if not os.path.exists(options.outputdir): os.makedirs(options.outputdir)
 if not os.path.exists(options.outputdir + runname + "_plots/"): os.makedirs(options.outputdir + runname + "_plots/")
 if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(options.outputdir + runname + "_events/")
+
+# Copy data from LNL to CERN
+# scp /data/Run001089/*.dat zucchett@lxplus.cern.ch:/afs/cern.ch/work/z/zucchett/public/FortyMHz/Run001089/
+# Copy data from CERN to local
+# mkdir data/Run001089
+# scp lxplus.cern.ch:/afs/cern.ch/work/z/zucchett/public/FortyMHz/Run001089/* data/Run001089/
 
 
 # Layer    # Parameters
@@ -41,11 +48,10 @@ if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(opt
 #          +--+--+--+--+--+--+
 
 
-def meanTimer(obj):
-    print obj
-    #return obj.sum()
-
-    #print group
+def meantimer(adf):
+    adf = adf.drop_duplicates() 
+    tzeros = meantimer_results(adf)[0]
+    adf['T0'] = np.mean(tzeros) if len(tzeros) > 0 else np.nan
     '''
     df = df.loc[df['SL']==sl+1]
     adf = df.drop_duplicates()
@@ -57,6 +63,7 @@ def meanTimer(obj):
     out[event+sl/10.] = tzeros
     return out[event+sl/10.]
     '''
+    return adf
 
 
 def meantimer_results(df_hits, verbose=False):
@@ -110,8 +117,9 @@ def meantimer_results(df_hits, verbose=False):
 
 
 
-
 ### Open file ###
+
+if options.verbose: print("Importing dataset...")
 
 if options.filename.endswith('.dat'):
     from modules.unpacker import *
@@ -129,7 +137,7 @@ elif options.filename.endswith('.txt') or options.filename.endswith('.csv'):
         names=['HEAD', 'FPGA', 'TDC_CHANNEL', 'ORBIT_CNT', 'BX_COUNTER', 'TDC_MEAS', 'TRG_QUALITY'], \
         dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'int32', 'TRG_QUALITY' : 'float64'}, \
         low_memory=False, \
-        skiprows=0, \
+        skiprows=1, \
     )
     if options.verbose: print("Read %d lines from txt file %s" % (len(df), options.filename))
 
@@ -142,17 +150,20 @@ if options.verbose: print df.head(50)
 
 # remove tdc_channel = 139 since they are not physical events
 df = df.loc[ df['TDC_CHANNEL']!=139 ]
+#df = df.loc[ df['FPGA']==1 ] #FIXME
 
+if options.verbose: print("Mapping channels...")
 
 # Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
 mapconverter = Mapping()
-df = mapconverter.virtex7lambda(df)
+df = mapconverter.virtex7(df)
+
+if options.verbose: print("Determining BX0...")
 
 
 # Determine BX0 either using meantimer or the trigger BX assignment
 if options.meantimer: # still to be developed
-    if options.verbose: print("Running meantimer")
-    
+
     # Use only hits
     df = df[df['HEAD']==1]
     
@@ -160,13 +171,26 @@ if options.meantimer: # still to be developed
     df['TDC_CHANNEL_NORM'] = (df['TDC_CHANNEL'] - 64 * (df['SL']%2)).astype(np.uint8)
     df['TIME_ABS'] = (df['ORBIT_CNT'].astype(np.float64)*DURATION['orbit'] + df['BX_COUNTER'].astype(np.float64)*DURATION['bx'] + df['TDC_MEAS'].astype(np.float64)*DURATION['tdc']).astype(np.float64)
 
-    # Group by orbit counter (event) and SL
+    
+    if options.verbose: print("Running meantimer...")
+    # Group by orbit counter (event) and SL    
+    df = df.groupby(['ORBIT_CNT', 'SL']).apply(meanTimer)
+    
+    '''
     grpbyorbit = df.groupby(['ORBIT_CNT', 'SL'])
+    norbit, norbits = 0, df['ORBIT_CNT'].nunique()
     for (iorbit, isl), adf in grpbyorbit:
+        norbit += 1
+        if options.verbose and norbit % 100 == 0:
+            print " + Running meantimer... (%3.2f %%)\r" % (100.*float(norbit)/float(norbits)),
+            sys.stdout.flush()
         adf = adf.drop_duplicates() 
         tzeros = meantimer_results(adf)[0]
         if len(tzeros) > 0: df.loc[(df['ORBIT_CNT'] == iorbit) & (df['SL'] == isl), 'T0'] = np.mean(tzeros)
+    '''
+
     
+
     # Calculate drift time
     hits = df[df['T0'].notna()].copy()
     hits['TDRIFT'] = (hits['TIME_ABS'] - hits['T0']).astype(np.float32)
@@ -183,6 +207,8 @@ else:
 
     # Create column TDRIFT
     hits['TDRIFT'] = (hits['BX_COUNTER']-hits['T0'])*DURATION['bx'] + hits['TDC_MEAS']*DURATION['tdc']
+
+if options.verbose: print("Assigning positions...")
 
 # Find events
 hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
@@ -207,6 +233,9 @@ if options.verbose: print hits[hits['TDC_CHANNEL'] >= -128].head(50)
 
 
 # General plots
+
+if options.verbose: print("Producing general plots...")
+
 import matplotlib.pyplot as plt
 
 if options.verbose: print("Writing plots in directory %s" % (options.outputdir + runname))
@@ -263,6 +292,12 @@ plt.savefig(options.outputdir + runname + "_plots/occupancy.pdf")
 if options.fast: exit()
 
 # Event display
+if not options.eventdisplay:
+    if options.verbose: print("Skipping event display...\nDone.")
+    exit()
+
+if options.verbose: print("Producing event displays...")
+
 from pdb import set_trace as br
 from operator import itemgetter
 from numpy.polynomial.polynomial import Polynomial
