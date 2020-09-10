@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-import config
+import modules.mapping.config
 
 class Mapping:
     '''Maps channel numbering from the KCU to detector-related quantities'''

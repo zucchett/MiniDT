@@ -7,7 +7,7 @@ import numpy as np
 import itertools
 from datetime import datetime
 
-from modules.analysis.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW
+from modules.mapping.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW
 from modules.mapping import *
 from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, meantimereq, mean_tzero, tzero_clusters
 
@@ -48,7 +48,8 @@ if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(opt
 # 4           |  4  |  8  |  12 | 16 ...
 #          +--+--+--+--+--+--+
 
-
+#from numba import jit
+#@jit
 def meantimer(adf):
     adf = adf.drop_duplicates() 
     tzeros = meantimer_results(adf)[0]
@@ -118,7 +119,7 @@ def meantimer_results(df_hits, verbose=False):
 
 
 itime = datetime.now()
-if options.verbose: print "Starting script [", itime, "]"
+if options.verbose: print("Starting script [", itime, "]")
 
 ### Open file ###
 
@@ -149,11 +150,11 @@ else:
     exit()
 
 
-if options.verbose: print df.head(50)
+if options.verbose: print(df.head(50))
 
 # remove tdc_channel = 139 since they are not physical events
 df = df.loc[ df['TDC_CHANNEL']!=139 ]
-#df = df.loc[ df['FPGA']==1 ] #FIXME
+df = df.loc[ df['FPGA']==1 ] #FIXME
 
 if options.verbose: print("Mapping channels...")
 
@@ -178,7 +179,7 @@ if options.meantimer: # still to be developed
     
     if options.verbose: print("Running meantimer...")
     # Group by orbit counter (event) and SL    
-    df = df.groupby(['ORBIT_CNT', 'SL']).apply(meanTimer)
+    df = df.groupby(['ORBIT_CNT', 'SL'], as_index=False).apply(meantimer)
     
     '''
     grpbyorbit = df.groupby(['ORBIT_CNT', 'SL'])
@@ -192,9 +193,9 @@ if options.meantimer: # still to be developed
         tzeros = meantimer_results(adf)[0]
         if len(tzeros) > 0: df.loc[(df['ORBIT_CNT'] == iorbit) & (df['SL'] == isl), 'T0'] = np.mean(tzeros)
     '''
-    
+
     mftime = datetime.now()
-    if options.verbose: print "\nMeantimer completed [", mftime - mitime, "]"
+    if options.verbose: print("\nMeantimer completed [", mftime - mitime, "]")
     
     # Calculate drift time
     hits = df[df['T0'].notna()].copy()
@@ -234,10 +235,10 @@ hits.loc[hits['SL'] == -1, 'SL'] = 1
 # Cosmetic changes to be compliant with common format
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
-if options.verbose: print hits[hits['TDC_CHANNEL'] >= -128].head(50)
+if options.verbose: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 
 ftime = datetime.now()
-if options.verbose: print "Ending analysis [", ftime, "],", "time elapsed [", ftime - itime, "]"
+if options.verbose: print("Ending analysis [", ftime, "],", "time elapsed [", ftime - itime, "]")
 
 
 # General plots
@@ -339,7 +340,7 @@ ev = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGH
 events = ev.groupby(['ORBIT'])
 # Loop on events (same orbit)
 for orbit, hitlist in events:
-    if options.verbose: print "Drawing event", orbit, "..."
+    if options.verbose: print("Drawing event", orbit, "...")
     H.reset()
     hits_lst = []
     # Loop over hits and fill H object
@@ -390,13 +391,13 @@ for orbit, hitlist in events:
                 if chi2 < config.FIT_CHI2_MAX:
                     a0, a1 = pfit
                     fit_results_lr.append((chi2, hit_ids, pfit))
-                    if options.verbose: print "Track found in SL", iSL, "with parameters:", a0, a1, ", chi2:", chi2
+                    if options.verbose: print("Track found in SL", iSL, "with parameters:", a0, a1, ", chi2:", chi2)
             # Keeping only the best fit result from the given set of physical hits
             fit_results_lr.sort(key=itemgetter(0))
             if fit_results_lr:
                 sl_fit_results[iSL].append(fit_results_lr[0])
                 bestp0, bestp1 = fit_results_lr[0][2]
-                print "+ Orbit", orbit, "best segment in SL", iSL, "with angle =", bestp1, "and offset =", bestp0, " ( chi2 =", fit_results_lr[0][0], ")"
+                print("+ Orbit", orbit, "best segment in SL", iSL, "with angle =", bestp1, "and offset =", bestp0, " ( chi2 =", fit_results_lr[0][0], ")")
         # Sorting the fit results of a SL by Chi2
         sl_fit_results[iSL].sort(key=itemgetter(0))
         if sl_fit_results[iSL]:
