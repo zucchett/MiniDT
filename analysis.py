@@ -5,6 +5,7 @@ import os, sys, math
 import pandas as pd
 import numpy as np
 import itertools
+from datetime import datetime
 
 from modules.analysis.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW
 from modules.mapping import *
@@ -116,6 +117,8 @@ def meantimer_results(df_hits, verbose=False):
     return tzeros, angles
 
 
+itime = datetime.now()
+if options.verbose: print "Starting script [", itime, "]"
 
 ### Open file ###
 
@@ -163,6 +166,7 @@ if options.verbose: print("Determining BX0...")
 
 # Determine BX0 either using meantimer or the trigger BX assignment
 if options.meantimer: # still to be developed
+    mitime = datetime.now()
 
     # Use only hits
     df = df[df['HEAD']==1]
@@ -188,9 +192,10 @@ if options.meantimer: # still to be developed
         tzeros = meantimer_results(adf)[0]
         if len(tzeros) > 0: df.loc[(df['ORBIT_CNT'] == iorbit) & (df['SL'] == isl), 'T0'] = np.mean(tzeros)
     '''
-
     
-
+    mftime = datetime.now()
+    if options.verbose: print "\nMeantimer completed [", mftime - mitime, "]"
+    
     # Calculate drift time
     hits = df[df['T0'].notna()].copy()
     hits['TDRIFT'] = (hits['TIME_ABS'] - hits['T0']).astype(np.float32)
@@ -230,6 +235,9 @@ hits.loc[hits['SL'] == -1, 'SL'] = 1
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
 if options.verbose: print hits[hits['TDC_CHANNEL'] >= -128].head(50)
+
+ftime = datetime.now()
+if options.verbose: print "Ending analysis [", ftime, "],", "time elapsed [", ftime - itime, "]"
 
 
 # General plots
