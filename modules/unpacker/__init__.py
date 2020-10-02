@@ -67,7 +67,7 @@ class Unpacker:
         HEAD         =      int(( word >> hfirstHEAD        ) & hmaskHEAD       )
         
         if((TDC_CHANNEL!=137) and (TDC_CHANNEL!=138)):
-                TDC_MEAS -= 1
+            TDC_MEAS -= 1
 
         unpacked  = {
             'HEAD': HEAD,

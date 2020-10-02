@@ -1,8 +1,21 @@
 # FortyMHz
 
+### Requirements
+
+The scripts run with python3; previous python versions also work but require minimal changes to the printouts, but form instance cannot use numba for performance improvements.
+
+The following packages are also required: `pandas` `matplotlib` `bokeh` `numba`
+
+They can be installed with `pip` using the command:
+
+`python3 -m pip install package1 package2 ...`
+
+
 # Analysis
 
-The script ```analysis.py``` reads a datafile (binary or txt) written to disk by the FortyMHz DAQ and performs a basic analysis on the data taken. The output consists of plots showing the basic DT chamber quantities (timebox, position, ...). If the input is a binary file, the data is unpacked on-the-fly before veing loaded into the pandas dataframe. The analysis script, if a BX assignment is also provided, performs all operations column-wise without any loop on the events. In the future, data visualization and fitting will be also implemented.
+The script ```analysis.py``` reads a datafile (binary or txt) written to disk by the FortyMHz DAQ and performs a basic analysis on the data taken. The output consists of plots showing the basic DT chamber quantities (timebox, position, ...). If the input is a binary file, the data is unpacked on-the-fly before being loaded into the pandas dataframe. The script is able to use the trigger BX assignment, if present (faster solution, does not require loops); otherwise, the meantimer equations are applyed layer-wise to determine the crossing time.
+
+The full list of options is available by typing `python3 analysis.py --help`.
 
 # Generation
 

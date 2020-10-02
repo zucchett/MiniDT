@@ -5,7 +5,7 @@ patterns  =  dictionary of patterns (list of triplets of hits time in bx relativ
 import math
 import numpy as np
 import pandas as pd
-from .config import NCHANNELS, TDRIFT, VDRIFT, ZCELL, MEANTIMER_CLUSTER_SIZE, MEANTIMER_SL_MULT_MIN
+from .config import NCHANNELS, TDRIFT, VDRIFT, ZCELL, MEANTIMER_CLUSTER_SIZE, MEANTIMER_SL_MULT_MIN, MEANTIMER_ANGLES
 from pdb import set_trace as br
 
 # Difference between t0 candidates that should be clustered together for the mean [ns]

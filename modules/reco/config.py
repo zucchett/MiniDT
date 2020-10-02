@@ -29,7 +29,7 @@ TIMEBOX = (-5, 380)
 
 # Precisions
 DTYPE_COOR = np.float64
-FIT_CHI2_MAX = 2.0
+FIT_CHI2_MAX = 4.0
 
 # Colors of fitted tracks
 TRACK_COLORS = ['limegreen', 'forestgreen', 'goldenrod', 'peru', 'tomato', 'maroon']

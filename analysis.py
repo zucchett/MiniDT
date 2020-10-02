@@ -9,13 +9,12 @@ from datetime import datetime
 
 from modules.mapping.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW
 from modules.mapping import *
-from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, meantimereq, mean_tzero, tzero_clusters
+from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, MEANTIMER_ANGLES, meantimereq, mean_tzero, tzero_clusters
 
 import optparse
 usage = "usage: %prog [options]"
 parser = optparse.OptionParser(usage)
 parser.add_option("-e", "--eventdisplay", action="store_true", default=False, dest="eventdisplay", help="Run event display (loop on events, takes time)")
-parser.add_option("-f", "--fast", action="store_true", default=False, dest="fast", help="Fast analysis, skip event display, create only summary plots")
 parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="data/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
 parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_option("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
@@ -48,11 +47,10 @@ if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(opt
 # 4           |  4  |  8  |  12 | 16 ...
 #          +--+--+--+--+--+--+
 
-#from numba import jit
-#@jit
+
 def meantimer(adf):
     adf = adf.drop_duplicates() 
-    tzeros = meantimer_results(adf)[0]
+    tzeros, angles = meantimer_results(adf)
     adf['T0'] = np.mean(tzeros) if len(tzeros) > 0 else np.nan
     '''
     df = df.loc[df['SL']==sl+1]
@@ -67,7 +65,8 @@ def meantimer(adf):
     '''
     return adf
 
-
+#from numba import jit
+#@jit
 def meantimer_results(df_hits, verbose=False):
     """Run meantimer over the group of hits"""
     sl = df_hits['SL'].iloc[0]
@@ -110,8 +109,9 @@ def meantimer_results(df_hits, verbose=False):
                         if verbose:
                             print('{4:d} {0:s}: {1:.0f}  {2:+.2f}  {3}'.format(pattern, mean_time, angle, triplet, sl))
                         # print(triplet, pattern, mean_time, angle)
-                        #if not MEANTIMER_ANGLES[sl][0] < angle < MEANTIMER_ANGLES[sl][1]: FIXME
-                        #    continue
+                        #if not MEANTIMER_ANGLES[sl][0] < angle < MEANTIMER_ANGLES[sl][1]: # Override requirement as long as SL are swapped
+                        if not -0.3 < angle < 0.3:
+                            continue
                         tzeros.append(mean_time)
                         angles.append(angle)
 
@@ -142,6 +142,7 @@ elif options.filename.endswith('.txt') or options.filename.endswith('.csv'):
         dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'int32', 'TRG_QUALITY' : 'float64'}, \
         low_memory=False, \
         skiprows=1, \
+        nrows=options.max*1024 + 1, \
     )
     if options.verbose: print("Read %d lines from txt file %s" % (len(df), options.filename))
 
@@ -153,14 +154,26 @@ else:
 if options.verbose: print(df.head(50))
 
 # remove tdc_channel = 139 since they are not physical events
-df = df.loc[ df['TDC_CHANNEL']!=139 ]
-df = df.loc[ df['FPGA']==1 ] #FIXME
+df = df[df['TDC_CHANNEL']<136]
+#df = df[df['FPGA']==0]
+# remove double hits
+##df['TDC_MEAS'] = df.groupby(['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'])['TDC_MEAS'].transform(np.max)
+##df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='last')
+#df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='first')
 
 if options.verbose: print("Mapping channels...")
 
 # Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
 mapconverter = Mapping()
 df = mapconverter.virtex7(df)
+#df = mapconverter.virtex7obdt(df)
+
+
+# FIXME: SL 0 and 1 are swapped
+pd.options.mode.chained_assignment = None
+df.loc[df['SL'] == 0, 'SL'] = -1
+df.loc[df['SL'] == 1, 'SL'] = 0
+df.loc[df['SL'] == -1, 'SL'] = 1
 
 if options.verbose: print("Determining BX0...")
 
@@ -173,11 +186,11 @@ if options.meantimer: # still to be developed
     df = df[df['HEAD']==1]
     
     # Add necessary columns
-    df['TDC_CHANNEL_NORM'] = (df['TDC_CHANNEL'] - 64 * (df['SL']%2)).astype(np.uint8)
+    #df['TDC_CHANNEL_NORM'] = (df['TDC_CHANNEL'] - 64 * (df['SL']%2)).astype(np.uint8)
     df['TIME_ABS'] = (df['ORBIT_CNT'].astype(np.float64)*DURATION['orbit'] + df['BX_COUNTER'].astype(np.float64)*DURATION['bx'] + df['TDC_MEAS'].astype(np.float64)*DURATION['tdc']).astype(np.float64)
 
     
-    if options.verbose: print("Running meantimer...")
+    if options.verbose: print("+ Running meantimer...")
     # Group by orbit counter (event) and SL    
     df = df.groupby(['ORBIT_CNT', 'SL'], as_index=False).apply(meantimer)
     
@@ -224,13 +237,6 @@ hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
 
 # Conversion from time to position
 mapconverter.addXleftright(hits)
-
-
-# FIXME: SL 0 and 1 are swapped
-pd.options.mode.chained_assignment = None
-hits.loc[hits['SL'] == 0, 'SL'] = -1
-hits.loc[hits['SL'] == 1, 'SL'] = 0
-hits.loc[hits['SL'] == -1, 'SL'] = 1
 
 # Cosmetic changes to be compliant with common format
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
@@ -298,7 +304,6 @@ for chamber in range(4):
 plt.savefig(options.outputdir + runname + "_plots/occupancy.png")
 plt.savefig(options.outputdir + runname + "_plots/occupancy.pdf")
 
-if options.fast: exit()
 
 # Event display
 if not options.eventdisplay:
@@ -336,6 +341,9 @@ GLOBAL_VIEW_SLs = {
 }
 
 ev = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS']]
+
+chi2s = {}
+for iSL, sl in SLs.items(): chi2s[iSL] = np.array([])
 
 events = ev.groupby(['ORBIT'])
 # Loop on events (same orbit)
@@ -398,6 +406,7 @@ for orbit, hitlist in events:
                 sl_fit_results[iSL].append(fit_results_lr[0])
                 bestp0, bestp1 = fit_results_lr[0][2]
                 print("+ Orbit", orbit, "best segment in SL", iSL, "with angle =", bestp1, "and offset =", bestp0, " ( chi2 =", fit_results_lr[0][0], ")")
+                chi2s[iSL] = np.append(chi2s[iSL], fit_results_lr[0][0])
         # Sorting the fit results of a SL by Chi2
         sl_fit_results[iSL].sort(key=itemgetter(0))
         if sl_fit_results[iSL]:
@@ -448,6 +457,20 @@ for orbit, hitlist in events:
         plots.append([figs['global'][v] for v in ['xz', 'yz']])
         bokeh.io.output_file(options.outputdir + runname + "_events/orbit_%d.html" % orbit, mode='cdn')
         bokeh.io.save(bokeh.layouts.layout(plots))
+
+
+# Chi2
+plt.figure(figsize=(15,10))
+for chamber in range(4):
+    hist, bins = np.histogram(chi2s[chamber], density=False, bins=20, range=(0, 2))
+    plt.subplot(2, 2, chamber+1)
+    plt.title("Chi2 [chamber %d]" % chamber)
+    plt.xlabel("Chi2")
+    plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
+plt.savefig(options.outputdir + runname + "_plots/chi2.png")
+plt.savefig(options.outputdir + runname + "_plots/chi2.pdf")
+
+
 
 #print ev.head(60)
 
