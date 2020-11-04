@@ -7,14 +7,14 @@ import numpy as np
 import itertools
 from datetime import datetime
 
-from modules.mapping.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW
+from modules.mapping.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW, XCELL, ZCELL
 from modules.mapping import *
 from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, MEANTIMER_ANGLES, meantimereq, mean_tzero, tzero_clusters
 
 import optparse
 usage = "usage: %prog [options]"
 parser = optparse.OptionParser(usage)
-parser.add_option("-e", "--eventdisplay", action="store_true", default=False, dest="eventdisplay", help="Run event display (loop on events, takes time)")
+parser.add_option("-e", "--eventdisplay", action="store", type=int, default=0, dest="eventdisplay", help="Number of event to display")
 parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="data/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
 parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_option("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
@@ -25,8 +25,8 @@ parser.add_option("-v", "--verbose", action="store_true", default=False, dest="v
 runname = [x for x in options.filename.split('/') if 'Run' in x][0] if "Run" in options.filename else "Run000000"
 
 if not os.path.exists(options.outputdir): os.makedirs(options.outputdir)
-if not os.path.exists(options.outputdir + runname + "_plots/"): os.makedirs(options.outputdir + runname + "_plots/")
-if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(options.outputdir + runname + "_events/")
+for d in ["plots", "display", "csv"]:
+    if not os.path.exists(options.outputdir + runname + "_" + d + "/"): os.makedirs(options.outputdir + runname + "_" + d + "/")
 
 # Copy data from LNL to CERN
 # scp /data/Run001089/*.dat zucchett@lxplus.cern.ch:/afs/cern.ch/work/z/zucchett/public/FortyMHz/Run001089/
@@ -45,7 +45,7 @@ if not os.path.exists(options.outputdir + runname + "_events/"): os.makedirs(opt
 # 3        |  2  |  6  |  10 |  14 | 18 ...
 #          +--+--+--+--+--+--+--+--+
 # 4           |  4  |  8  |  12 | 16 ...
-#          +--+--+--+--+--+--+
+#          +--+--+--+--+--+--+--+--+
 
 
 def meantimer(adf):
@@ -156,10 +156,21 @@ if options.verbose: print(df.head(50))
 # remove tdc_channel = 139 since they are not physical events
 df = df[df['TDC_CHANNEL']<136]
 #df = df[df['FPGA']==0]
+#df = df[df['ORBIT_CNT'] == 544830352] # monstre event
+#df = df[df['ORBIT_CNT'] == 1406379098] # another monstre events
+#df = df[df['ORBIT_CNT'] == 1406809648] # super-monstre event
+#df = df[df['ORBIT_CNT'] == 1406978288] # another super-monstre event
+#df = df[df['ORBIT_CNT'] == 1407759916] # Mega-monstre
+#df = df[df['ORBIT_CNT'] == 1412153032] # Iper-monstre
+
 # remove double hits
 ##df['TDC_MEAS'] = df.groupby(['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'])['TDC_MEAS'].transform(np.max)
 ##df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='last')
 #df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='first')
+
+if len(df) == 0:
+    print("Empty dataframe, exiting...")
+    exit()
 
 if options.verbose: print("Mapping channels...")
 
@@ -243,8 +254,199 @@ hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER',
 
 if options.verbose: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 
-ftime = datetime.now()
-if options.verbose: print("Ending analysis [", ftime, "],", "time elapsed [", ftime - itime, "]")
+utime = datetime.now()
+if options.verbose: print("Unpacking completed [", utime, "],", "time elapsed [", utime - itime, "]")
+
+
+# Reconstruction
+events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS']]
+
+events['X'] = np.nan
+events['X_FIT'] = np.nan
+events['X_LABEL'] = 0
+
+seglist = []
+
+# Segment reconstruction
+from numpy.polynomial.polynomial import Polynomial
+
+from modules.reco import config, plot
+
+evs = events.groupby(['ORBIT', 'CHAMBER'])
+ievs, nevs = 0., len(evs)
+
+# Loop on events (same orbit)
+for ievsl, hitlist in evs:
+    ievs += 1.
+    iorbit, isl = ievsl
+    nhits = len(hitlist)
+    if nhits > 20:
+        if options.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum number of hits (", nhits, ")")
+        continue
+    # Explicitly introduce left/right ambiguity
+    lhits, rhits = hitlist.copy(), hitlist.copy()
+    lhits['X_LABEL'] = 1
+    lhits['X'] = lhits['X_LEFT']
+    rhits['X_LABEL'] = 2
+    rhits['X'] = rhits['X_RIGHT']
+    lrhits = lhits.append(rhits, ignore_index=True) # Join the left and right hits
+    
+    # Compute all possible combinations in the most efficient way
+    layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(4)]
+    all_combs = list(itertools.product(*layer_list))
+    if options.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations [%.2f %%]" % (100.*ievs/nevs))
+    fitRange, fitResults = (hitlist['Z'].min() - 0.5*ZCELL, hitlist['Z'].max() + 0.5*ZCELL), []
+    
+    # Fitting each combination
+    for comb in all_combs:
+        lrcomb = lrhits.iloc[list(comb)]
+        # Try to reject improbable combinations: difference between adjacent wires should be 2 or smaller
+        if max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
+        posx, posz = lrcomb['X'], lrcomb['Z']
+        seg_layer, seg_wire, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['X_LABEL'].values
+        
+        # Fit
+        pfit, stats = Polynomial.fit(posx, posz, 1, full=True, window=fitRange, domain=fitRange)
+        if len(stats[0]) > 0:
+            chi2 = stats[0][0] / max(nhits, 4)
+            p0, p1 = pfit
+            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
+                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
+    fitResults.sort(key=lambda x: x["chi2"])
+
+    if len(fitResults) > 0:
+        seglist.append({'ORBIT' : iorbit, 'CHAMBER' : isl, 'NHITS' : len(hitlist), 'P0' : fitResults[0]["pars"][0], "P1" : fitResults[0]["pars"][1], "CHI2" : fitResults[0]["chi2"]})
+        for ilabel, ilayer, iwire in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"]):
+            events.loc[(events['ORBIT'] == iorbit) & (events['CHAMBER'] == isl) & (events['LAYER'] == ilayer) & (events['WIRE'] == iwire), 'X_LABEL'] = ilabel
+            events.loc[(events['ORBIT'] == iorbit) & (events['CHAMBER'] == isl) & (events['LAYER'] == ilayer) & (events['WIRE'] == iwire), 'X_FIT'] = (lrhits.loc[(lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire), 'Z'] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
+
+events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
+events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
+
+rtime = datetime.now()
+if options.verbose: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
+
+segments = pd.DataFrame.from_dict(seglist)
+if options.verbose:
+    print(events.head(50))
+    print(segments.head(50))
+
+# Output to csv files
+events.to_csv(options.outputdir + runname + "_csv/events.csv", header=True, index=False)
+segments.to_csv(options.outputdir + runname + "_csv/segments.csv", header=True, index=False)
+
+# Event display
+from modules.utils import OUT_CONFIG
+from modules.geometry.hit import HitManager
+from modules.geometry.sl import SL
+from modules.geometry.segment import Segment
+from modules.geometry import Geometry, COOR_ID
+from modules.reco import config, plot
+from modules.analysis import config as CONFIGURATION
+
+import bokeh
+
+# Initialize geometry
+G = Geometry(CONFIGURATION)
+H = HitManager()
+SLs = {}
+for iSL in config.SL_SHIFT.keys():
+    SLs[iSL] = SL(iSL, config.SL_SHIFT[iSL], config.SL_ROTATION[iSL])
+
+# Defining which SLs should be plotted in which global view
+GLOBAL_VIEW_SLs = {
+    'xz': [SLs[0], SLs[2]],
+    'yz': [SLs[1], SLs[3]]
+}
+
+evs = events.groupby(['ORBIT'])
+
+neventdisplays = 0
+
+# Loop on events (same orbit)
+for orbit, hitlist in evs:
+    neventdisplays += 1
+    if neventdisplays > options.eventdisplay: break
+    if options.verbose: print("Drawing event", orbit, "...")
+    # Creating figures of the chambers
+    figs = {}
+    figs['sl'] = plot.book_chambers_figure(G)
+    figs['global'] = plot.book_global_figure(G, GLOBAL_VIEW_SLs)
+    # Draw chamber
+    for iSL, sl in SLs.items():
+        # Hits
+        hitsl = hitlist[hitlist['CHAMBER'] == iSL]
+        figs['sl'][iSL].circle(x=hitsl['X_LEFT'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=0.5, line_width=0)
+        figs['sl'][iSL].circle(x=hitsl['X_RIGHT'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=0.5, line_width=0)
+        figs['sl'][iSL].circle(x=hitsl['X'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=1., line_width=0)
+        # Segments
+        if len(segments) > 0:
+            segsl = segments[(segments['ORBIT'] == orbit) & (segments['CHAMBER'] == iSL)]
+            for index, seg in segsl.iterrows():
+                #col = config.TRACK_COLORS[iR]
+                segz = [G.SL_FRAME['b']+1, G.SL_FRAME['t']-1]
+                segx = [((z - seg['P0']) / seg['P1']) for z in segz]
+                print(segz, segx, seg['P1'], seg['P0'])
+                figs['sl'][iSL].line(x=np.array(segx), y=np.array(segz), line_color='black', line_alpha=0.7, line_width=3)
+
+    plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
+    plots.append([figs['global'][v] for v in ['xz', 'yz']])
+    bokeh.io.output_file(options.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
+    bokeh.io.save(bokeh.layouts.layout(plots))
+
+'''
+    
+    
+        
+        hits_sl = H.hits.loc[H.hits['sl'] == iSL].sort_values('layer')
+
+        if True: #args.plot:
+            
+        # Performing track reconstruction in the local frame
+        sl_fit_results[iSL] = []
+        layer_groups = hits_sl.groupby('layer').groups
+        n_layers = len(layer_groups)
+        # Stopping if lass than 3 layers of hits
+        if n_layers < config.NHITS_MIN_LOCAL:
+            continue
+        hitid_layers = [gr.to_numpy() for gr_name, gr in layer_groups.items()]
+        # Building the list of all possible hit combinations with 1 hit from each layer
+        hits_layered = list(itertools.product(*hitid_layers))
+        # Building more combinations using only either left or right position of each hit
+        for hit_ids in hits_layered:
+            # print('- -', hit_ids)
+            posz = hits_sl.loc[hits_sl.index.isin(hit_ids), 'posz'].values
+            posx = hits_sl.loc[hits_sl.index.isin(hit_ids), ['lposx', 'rposx']].values
+            posx_combs = list(itertools.product(*posx))
+            # Fitting each combination
+            fit_results_lr = []
+            fit_range = (min(posz), max(posz))
+            for iC, posx_comb in enumerate(posx_combs):
+                pfit, stats = Polynomial.fit(posz, posx_comb, 1, full=True, window=fit_range, domain=fit_range)
+                chi2 = stats[0][0] / n_layers
+                if chi2 < config.FIT_CHI2_MAX:
+                    a0, a1 = pfit
+                    fit_results_lr.append((chi2, hit_ids, pfit))
+                    if options.verbose: print("Track found in SL", iSL, "with parameters:", a0, a1, ", chi2:", chi2)
+            # Keeping only the best fit result from the given set of physical hits
+            fit_results_lr.sort(key=itemgetter(0))
+            if fit_results_lr:
+                sl_fit_results[iSL].append(fit_results_lr[0])
+                bestp0, bestp1 = fit_results_lr[0][2]
+                print("+ Orbit", orbit, "best segment in SL", iSL, "with angle =", bestp1, "and offset =", bestp0, " ( chi2 =", fit_results_lr[0][0], ")")
+                chi2s[iSL] = np.append(chi2s[iSL], fit_results_lr[0][0])
+        # Sorting the fit results of a SL by Chi2
+        sl_fit_results[iSL].sort(key=itemgetter(0))
+        if sl_fit_results[iSL]:
+            # Drawing fitted tracks
+            posz = np.array([G.SL_FRAME['b']+1, G.SL_FRAME['t']-1], dtype=np.float32)
+            for iR, res in enumerate(sl_fit_results[iSL][:5]):
+                col = config.TRACK_COLORS[iR]
+                posx = res[2](posz)
+                figs['sl'][iSL].line(x=posx, y=posz,
+                                     line_color=col, line_alpha=0.7, line_width=3)
+'''
+
 
 
 # General plots
@@ -305,8 +507,13 @@ plt.savefig(options.outputdir + runname + "_plots/occupancy.png")
 plt.savefig(options.outputdir + runname + "_plots/occupancy.pdf")
 
 
+
+
+
+''' OLD RECONSTRUCTION, TO BE SUPERSEEDED
+
 # Event display
-if not options.eventdisplay:
+if options.eventdisplay == 0:
     if options.verbose: print("Skipping event display...\nDone.")
     exit()
 
@@ -340,14 +547,12 @@ GLOBAL_VIEW_SLs = {
     'yz': [SLs[1], SLs[3]]
 }
 
-ev = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS']]
-
 chi2s = {}
 for iSL, sl in SLs.items(): chi2s[iSL] = np.array([])
 
-events = ev.groupby(['ORBIT'])
+evs = events.groupby(['ORBIT'])
 # Loop on events (same orbit)
-for orbit, hitlist in events:
+for orbit, hitlist in evs:
     if options.verbose: print("Drawing event", orbit, "...")
     H.reset()
     hits_lst = []
@@ -470,7 +675,7 @@ for chamber in range(4):
 plt.savefig(options.outputdir + runname + "_plots/chi2.png")
 plt.savefig(options.outputdir + runname + "_plots/chi2.pdf")
 
-
+'''
 
 #print ev.head(60)
 

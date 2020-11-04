@@ -15,7 +15,7 @@ class Unpacker:
     def unpack(self, inputfile, maxwords=-1):
         dt = []
         word_count = 0
-        while (word_count < 0 or word_count < maxwords):
+        while (maxwords < 0 or word_count < maxwords):
             word = inputfile.read(self.num_words*self.word_size)
             if word:
                   d = self.unpacker(word)
