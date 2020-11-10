@@ -14,14 +14,14 @@ from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNE
 import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
 parser.add_argument("-e", "--eventdisplay", action="store", type=int, default=0, dest="eventdisplay", help="Number of event to display")
-parser.add_argument("-i", "--inputfile", nargs='+', dest="filename", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
+parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
 parser.add_argument("-x", "--meantimer", action="store_true", default=False, dest="meantimer", help="Force application of the meantimer algorithm (override BX assignment)")
 parser.add_argument("-v", "--verbose", action="store_true", default=False, dest="verbose", help="Increase verbosity")
 args = parser.parse_args()
 
-runname = [x for x in args.filename.split('/') if 'Run' in x][0] if "Run" in args.filename else "Run000000"
+runname = [x for x in args.filenames[0].split('/') if 'Run' in x][0] if "Run" in args.filenames[0] else "Run000000"
 
 if not os.path.exists(args.outputdir): os.makedirs(args.outputdir)
 for d in ["plots", "display", "csv"]:
@@ -124,31 +124,36 @@ if args.verbose: print("Starting script [", itime, "]")
 
 if args.verbose: print("Importing dataset...")
 
-if args.filename[0].endswith('.dat'):
-    from modules.unpacker import *
-    unpk = Unpacker()
-    inputFile = open(args.filename[0], 'rb')
-    dt = unpk.unpack(inputFile, args.max)
+df = pd.DataFrame()
 
-    if args.verbose: print("Read %d lines from binary file %s" % (len(dt), args.filename))
-    df = pd.DataFrame.from_dict(dt)
-    
-elif args.filename[0].endswith('.txt') or args.filename.endswith('.csv'):
-    # force 7 fields
-    # in case of forcing, for some reason, the first raw is not interpreted as columns names
-    df = pd.read_csv(args.filename[0], \
-        names=['HEAD', 'FPGA', 'TDC_CHANNEL', 'ORBIT_CNT', 'BX_COUNTER', 'TDC_MEAS', 'TRG_QUALITY'], \
-        dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'int32', 'TRG_QUALITY' : 'float64'}, \
-        low_memory=False, \
-        skiprows=1, \
-        nrows=args.max*1024 + 1, \
-    )
-    if args.verbose: print("Read %d lines from txt file %s" % (len(df), args.filename))
+for filename in args.filenames:
 
-else:
-    print("File format not recognized, exiting...")
-    exit()
+    if filename.endswith('.dat'):
+        from modules.unpacker import *
+        unpk = Unpacker()
+        inputFile = open(args.filenames[0], 'rb')
+        dt = unpk.unpack(inputFile, args.max)
 
+        if args.verbose: print("Read %d lines from binary file %s" % (len(dt), args.filenames))
+        df = df.append(pd.DataFrame.from_dict(dt))
+        
+    elif filename.endswith('.txt') or filename.endswith('.csv'):
+        # force 7 fields
+        # in case of forcing, for some reason, the first raw is not interpreted as columns names
+        dt = pd.read_csv(args.filenames[0], \
+            names=['HEAD', 'FPGA', 'TDC_CHANNEL', 'ORBIT_CNT', 'BX_COUNTER', 'TDC_MEAS', 'TRG_QUALITY'], \
+            dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'int32', 'TRG_QUALITY' : 'float64'}, \
+            low_memory=False, \
+            skiprows=1, \
+            nrows=args.max*1024 + 1, \
+        )
+        if args.verbose: print("Read %d lines from txt file %s" % (len(df), args.filenames))
+        df = df.append(pd.DataFrame.from_dict(dt), ignore_index=True)
+
+    else:
+        print("File format not recognized, skipping file...")
+
+if len(df) == 0: exit()
 
 if args.verbose: print(df.head(50))
 
@@ -305,12 +310,19 @@ for ievsl, hitlist in evs:
         seg_layer, seg_wire, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['X_LABEL'].values
         
         # Fit
+        '''
         pfit, stats = Polynomial.fit(posx, posz, 1, full=True, window=fitRange, domain=fitRange)
         if len(stats[0]) > 0:
             chi2 = stats[0][0] / max(nhits, 4)
             p0, p1 = pfit
             if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
                 fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
+        '''
+        pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
+        p0, p1 = pfit
+        if residuals[0] < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
+            fitResults.append({"chi2" : residuals[0], "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
+        
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
