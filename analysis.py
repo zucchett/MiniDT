@@ -13,7 +13,8 @@ from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNE
 
 import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
-parser.add_argument("-e", "--eventdisplay", action="store", type=int, default=0, dest="eventdisplay", help="Number of event to display")
+parser.add_argument("-d", "--display", action="store", type=int, default=0, dest="display", help="Number of event to display")
+parser.add_argument("-e", "--event", action="store", type=int, default=0, dest="event", help="Inspect a signle event")
 parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
@@ -159,6 +160,8 @@ if args.verbose: print(df.head(50))
 
 # remove tdc_channel = 139 since they are not physical events
 df = df[df['TDC_CHANNEL']<136]
+if args.event > 0: df = df[df['ORBIT_CNT'] == args.event]
+
 #df = df[df['FPGA']==0]
 #df = df[df['ORBIT_CNT'] == 544830352] # monstre event
 #df = df[df['ORBIT_CNT'] == 1406379098] # another monstre events
@@ -166,6 +169,9 @@ df = df[df['TDC_CHANNEL']<136]
 #df = df[df['ORBIT_CNT'] == 1406978288] # another super-monstre event
 #df = df[df['ORBIT_CNT'] == 1407759916] # Mega-monstre
 #df = df[df['ORBIT_CNT'] == 1412153032] # Iper-monstre
+#df = df[df['ORBIT_CNT'] == 544654370]
+#df = df[df['ORBIT_CNT'] == 544768455]
+
 
 # remove double hits
 ##df['TDC_MEAS'] = df.groupby(['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'])['TDC_MEAS'].transform(np.max)
@@ -296,7 +302,7 @@ for ievsl, hitlist in evs:
     lrhits = lhits.append(rhits, ignore_index=True) # Join the left and right hits
     
     # Compute all possible combinations in the most efficient way
-    layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(4)]
+    layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(min(nhits, 4))]
     all_combs = list(itertools.product(*layer_list))
     if args.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations [%.2f %%]" % (100.*ievs/nevs))
     fitRange, fitResults = (hitlist['Z'].min() - 0.5*ZCELL, hitlist['Z'].max() + 0.5*ZCELL), []
@@ -307,7 +313,7 @@ for ievsl, hitlist in evs:
         # Try to reject improbable combinations: difference between adjacent wires should be 2 or smaller
         if max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
         posx, posz = lrcomb['X'], lrcomb['Z']
-        seg_layer, seg_wire, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['X_LABEL'].values
+        seg_layer, seg_wire, seg_bx, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values
         
         # Fit
         '''
@@ -319,17 +325,19 @@ for ievsl, hitlist in evs:
                 fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
         '''
         pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
-        p0, p1 = pfit
-        if residuals[0] < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-            fitResults.append({"chi2" : residuals[0], "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
+        if len(residuals) > 0:
+            p1, p0 = pfit
+            chi2 = residuals[0] / max(nhits, 4)
+            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
+                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "pars" : [p0, p1]})
         
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
         seglist.append({'ORBIT' : iorbit, 'CHAMBER' : isl, 'NHITS' : len(hitlist), 'P0' : fitResults[0]["pars"][0], "P1" : fitResults[0]["pars"][1], "CHI2" : fitResults[0]["chi2"]})
-        for ilabel, ilayer, iwire in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"]):
-            events.loc[(events['ORBIT'] == iorbit) & (events['CHAMBER'] == isl) & (events['LAYER'] == ilayer) & (events['WIRE'] == iwire), 'X_LABEL'] = ilabel
-            events.loc[(events['ORBIT'] == iorbit) & (events['CHAMBER'] == isl) & (events['LAYER'] == ilayer) & (events['WIRE'] == iwire), 'X_FIT'] = (lrhits.loc[(lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire), 'Z'] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
+        for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
+            x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
+            events.loc[(events['ORBIT'] == iorbit) & (events['BX'] == ibx) & (events['CHAMBER'] == isl) & (events['LAYER'] == ilayer) & (events['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
 
 events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
 events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
@@ -372,12 +380,12 @@ GLOBAL_VIEW_SLs = {
 
 evs = events.groupby(['ORBIT'])
 
-neventdisplays = 0
+ndisplays = 0
 
 # Loop on events (same orbit)
 for orbit, hitlist in evs:
-    neventdisplays += 1
-    if neventdisplays > args.eventdisplay: break
+    ndisplays += 1
+    if ndisplays > args.display: break
     if args.verbose: print("Drawing event", orbit, "...")
     # Creating figures of the chambers
     figs = {}
@@ -397,7 +405,7 @@ for orbit, hitlist in evs:
                 #col = config.TRACK_COLORS[iR]
                 segz = [G.SL_FRAME['b']+1, G.SL_FRAME['t']-1]
                 segx = [((z - seg['P0']) / seg['P1']) for z in segz]
-                print(segz, segx, seg['P1'], seg['P0'])
+                #print(segz, segx, seg['P1'], seg['P0'])
                 figs['sl'][iSL].line(x=np.array(segx), y=np.array(segz), line_color='black', line_alpha=0.7, line_width=3)
 
     plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
