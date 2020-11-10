@@ -17,11 +17,12 @@ class Unpacker:
         word_count = 0
         while (maxwords < 0 or word_count < maxwords):
             word = inputfile.read(self.num_words*self.word_size)
-            if word:
+            
+            if word and len(word) == self.num_words*self.word_size:
                   d = self.unpacker(word)
                   dt += d
                   word_count += 1
-                  #print len(dt)
+
             else: break
         return dt
 
@@ -42,6 +43,7 @@ class Unpacker:
                 rows.append(self.trigger_unpacker(buffer))
             
         return rows
+
 
     def hit_unpacker(self, word):
         # hit masks
@@ -80,6 +82,7 @@ class Unpacker:
         }
         
         return unpacked #Row(**unpacked)
+
 
     def trigger_unpacker(self, word):
         # Trigger masks
