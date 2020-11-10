@@ -11,22 +11,21 @@ from modules.mapping.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW, XCELL,
 from modules.mapping import *
 from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, MEANTIMER_ANGLES, meantimereq, mean_tzero, tzero_clusters
 
-import optparse
-usage = "usage: %prog [options]"
-parser = optparse.OptionParser(usage)
-parser.add_option("-e", "--eventdisplay", action="store", type=int, default=0, dest="eventdisplay", help="Number of event to display")
-parser.add_option("-i", "--inputfile", action="store", type="string", dest="filename", default="data/Run000966/output_raw.dat", help="Provide input file (either binary or txt)")
-parser.add_option("-o", "--outputdir", action="store", type="string", dest="outputdir", default="./output/", help="Specify output directory")
-parser.add_option("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
-parser.add_option("-x", "--meantimer", action="store_true", default=False, dest="meantimer", help="Force application of the meantimer algorithm (override BX assignment)")
-parser.add_option("-v", "--verbose", action="store_true", default=False, dest="verbose", help="Increase verbosity")
-(options, args) = parser.parse_args()
+import argparse
+parser = argparse.ArgumentParser(description='Command line arguments')
+parser.add_argument("-e", "--eventdisplay", action="store", type=int, default=0, dest="eventdisplay", help="Number of event to display")
+parser.add_argument("-i", "--inputfile", nargs='+', dest="filename", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
+parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
+parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
+parser.add_argument("-x", "--meantimer", action="store_true", default=False, dest="meantimer", help="Force application of the meantimer algorithm (override BX assignment)")
+parser.add_argument("-v", "--verbose", action="store_true", default=False, dest="verbose", help="Increase verbosity")
+args = parser.parse_args()
 
-runname = [x for x in options.filename.split('/') if 'Run' in x][0] if "Run" in options.filename else "Run000000"
+runname = [x for x in args.filename.split('/') if 'Run' in x][0] if "Run" in args.filename else "Run000000"
 
-if not os.path.exists(options.outputdir): os.makedirs(options.outputdir)
+if not os.path.exists(args.outputdir): os.makedirs(args.outputdir)
 for d in ["plots", "display", "csv"]:
-    if not os.path.exists(options.outputdir + runname + "_" + d + "/"): os.makedirs(options.outputdir + runname + "_" + d + "/")
+    if not os.path.exists(args.outputdir + runname + "_" + d + "/"): os.makedirs(args.outputdir + runname + "_" + d + "/")
 
 # Copy data from LNL to CERN
 # scp /data/Run001089/*.dat zucchett@lxplus.cern.ch:/afs/cern.ch/work/z/zucchett/public/FortyMHz/Run001089/
@@ -119,39 +118,39 @@ def meantimer_results(df_hits, verbose=False):
 
 
 itime = datetime.now()
-if options.verbose: print("Starting script [", itime, "]")
+if args.verbose: print("Starting script [", itime, "]")
 
 ### Open file ###
 
-if options.verbose: print("Importing dataset...")
+if args.verbose: print("Importing dataset...")
 
-if options.filename.endswith('.dat'):
+if args.filename[0].endswith('.dat'):
     from modules.unpacker import *
     unpk = Unpacker()
-    inputFile = open(options.filename, 'rb')
-    dt = unpk.unpack(inputFile, options.max)
+    inputFile = open(args.filename[0], 'rb')
+    dt = unpk.unpack(inputFile, args.max)
 
-    if options.verbose: print("Read %d lines from binary file %s" % (len(dt), options.filename))
+    if args.verbose: print("Read %d lines from binary file %s" % (len(dt), args.filename))
     df = pd.DataFrame.from_dict(dt)
     
-elif options.filename.endswith('.txt') or options.filename.endswith('.csv'):
+elif args.filename[0].endswith('.txt') or args.filename.endswith('.csv'):
     # force 7 fields
     # in case of forcing, for some reason, the first raw is not interpreted as columns names
-    df = pd.read_csv(options.filename, \
+    df = pd.read_csv(args.filename[0], \
         names=['HEAD', 'FPGA', 'TDC_CHANNEL', 'ORBIT_CNT', 'BX_COUNTER', 'TDC_MEAS', 'TRG_QUALITY'], \
         dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'int32', 'TRG_QUALITY' : 'float64'}, \
         low_memory=False, \
         skiprows=1, \
-        nrows=options.max*1024 + 1, \
+        nrows=args.max*1024 + 1, \
     )
-    if options.verbose: print("Read %d lines from txt file %s" % (len(df), options.filename))
+    if args.verbose: print("Read %d lines from txt file %s" % (len(df), args.filename))
 
 else:
     print("File format not recognized, exiting...")
     exit()
 
 
-if options.verbose: print(df.head(50))
+if args.verbose: print(df.head(50))
 
 # remove tdc_channel = 139 since they are not physical events
 df = df[df['TDC_CHANNEL']<136]
@@ -172,7 +171,7 @@ if len(df) == 0:
     print("Empty dataframe, exiting...")
     exit()
 
-if options.verbose: print("Mapping channels...")
+if args.verbose: print("Mapping channels...")
 
 # Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
 mapconverter = Mapping()
@@ -186,11 +185,11 @@ df.loc[df['SL'] == 0, 'SL'] = -1
 df.loc[df['SL'] == 1, 'SL'] = 0
 df.loc[df['SL'] == -1, 'SL'] = 1
 
-if options.verbose: print("Determining BX0...")
+if args.verbose: print("Determining BX0...")
 
 
 # Determine BX0 either using meantimer or the trigger BX assignment
-if options.meantimer: # still to be developed
+if args.meantimer: # still to be developed
     mitime = datetime.now()
 
     # Use only hits
@@ -201,7 +200,7 @@ if options.meantimer: # still to be developed
     df['TIME_ABS'] = (df['ORBIT_CNT'].astype(np.float64)*DURATION['orbit'] + df['BX_COUNTER'].astype(np.float64)*DURATION['bx'] + df['TDC_MEAS'].astype(np.float64)*DURATION['tdc']).astype(np.float64)
 
     
-    if options.verbose: print("+ Running meantimer...")
+    if args.verbose: print("+ Running meantimer...")
     # Group by orbit counter (event) and SL    
     df = df.groupby(['ORBIT_CNT', 'SL'], as_index=False).apply(meantimer)
     
@@ -210,7 +209,7 @@ if options.meantimer: # still to be developed
     norbit, norbits = 0, df['ORBIT_CNT'].nunique()
     for (iorbit, isl), adf in grpbyorbit:
         norbit += 1
-        if options.verbose and norbit % 100 == 0:
+        if args.verbose and norbit % 100 == 0:
             print " + Running meantimer... (%3.2f %%)\r" % (100.*float(norbit)/float(norbits)),
             sys.stdout.flush()
         adf = adf.drop_duplicates() 
@@ -219,7 +218,7 @@ if options.meantimer: # still to be developed
     '''
 
     mftime = datetime.now()
-    if options.verbose: print("\nMeantimer completed [", mftime - mitime, "]")
+    if args.verbose: print("\nMeantimer completed [", mftime - mitime, "]")
     
     # Calculate drift time
     hits = df[df['T0'].notna()].copy()
@@ -238,7 +237,7 @@ else:
     # Create column TDRIFT
     hits['TDRIFT'] = (hits['BX_COUNTER']-hits['T0'])*DURATION['bx'] + hits['TDC_MEAS']*DURATION['tdc']
 
-if options.verbose: print("Assigning positions...")
+if args.verbose: print("Assigning positions...")
 
 # Find events
 hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
@@ -252,14 +251,14 @@ mapconverter.addXleftright(hits)
 # Cosmetic changes to be compliant with common format
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
-if options.verbose: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
+if args.verbose: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 
 utime = datetime.now()
-if options.verbose: print("Unpacking completed [", utime, "],", "time elapsed [", utime - itime, "]")
+if args.verbose: print("Unpacking completed [", utime, "],", "time elapsed [", utime - itime, "]")
 
 
 # Reconstruction
-events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS']]
+events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0']]
 
 events['X'] = np.nan
 events['X_FIT'] = np.nan
@@ -281,7 +280,7 @@ for ievsl, hitlist in evs:
     iorbit, isl = ievsl
     nhits = len(hitlist)
     if nhits > 20:
-        if options.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum number of hits (", nhits, ")")
+        if args.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum number of hits (", nhits, ")")
         continue
     # Explicitly introduce left/right ambiguity
     lhits, rhits = hitlist.copy(), hitlist.copy()
@@ -294,7 +293,7 @@ for ievsl, hitlist in evs:
     # Compute all possible combinations in the most efficient way
     layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(4)]
     all_combs = list(itertools.product(*layer_list))
-    if options.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations [%.2f %%]" % (100.*ievs/nevs))
+    if args.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations [%.2f %%]" % (100.*ievs/nevs))
     fitRange, fitResults = (hitlist['Z'].min() - 0.5*ZCELL, hitlist['Z'].max() + 0.5*ZCELL), []
     
     # Fitting each combination
@@ -324,16 +323,16 @@ events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
 events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
 
 rtime = datetime.now()
-if options.verbose: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
+if args.verbose: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
 
 segments = pd.DataFrame.from_dict(seglist)
-if options.verbose:
+if args.verbose:
     print(events.head(50))
     print(segments.head(50))
 
 # Output to csv files
-events.to_csv(options.outputdir + runname + "_csv/events.csv", header=True, index=False)
-segments.to_csv(options.outputdir + runname + "_csv/segments.csv", header=True, index=False)
+events.to_csv(args.outputdir + runname + "_csv/events.csv", header=True, index=False)
+segments.to_csv(args.outputdir + runname + "_csv/segments.csv", header=True, index=False)
 
 # Event display
 from modules.utils import OUT_CONFIG
@@ -366,8 +365,8 @@ neventdisplays = 0
 # Loop on events (same orbit)
 for orbit, hitlist in evs:
     neventdisplays += 1
-    if neventdisplays > options.eventdisplay: break
-    if options.verbose: print("Drawing event", orbit, "...")
+    if neventdisplays > args.eventdisplay: break
+    if args.verbose: print("Drawing event", orbit, "...")
     # Creating figures of the chambers
     figs = {}
     figs['sl'] = plot.book_chambers_figure(G)
@@ -391,7 +390,7 @@ for orbit, hitlist in evs:
 
     plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
     plots.append([figs['global'][v] for v in ['xz', 'yz']])
-    bokeh.io.output_file(options.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
+    bokeh.io.output_file(args.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
     bokeh.io.save(bokeh.layouts.layout(plots))
 
 '''
@@ -451,11 +450,11 @@ for orbit, hitlist in evs:
 
 # General plots
 
-if options.verbose: print("Producing general plots...")
+if args.verbose: print("Producing general plots...")
 
 import matplotlib.pyplot as plt
 
-if options.verbose: print("Writing plots in directory %s" % (options.outputdir + runname))
+if args.verbose: print("Writing plots in directory %s" % (args.outputdir + runname))
 
 # Timebox
 plt.figure(figsize=(15,10))
@@ -465,8 +464,8 @@ for chamber in range(4):
     plt.title("Timebox [chamber %d]" % chamber)
     plt.xlabel("Time (ns)")
     plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(options.outputdir + runname + "_plots/timebox.png")
-plt.savefig(options.outputdir + runname + "_plots/timebox.pdf")
+plt.savefig(args.outputdir + runname + "_plots/timebox.png")
+plt.savefig(args.outputdir + runname + "_plots/timebox.pdf")
 
 
 # Space boxes
@@ -477,8 +476,8 @@ for chamber in range(4):
     plt.title("Space box LEFT [chamber %d]" % chamber)
     plt.xlabel("Position (mm)")
     plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(options.outputdir + runname + "_plots/spacebox_left.png")
-plt.savefig(options.outputdir + runname + "_plots/spacebox_left.pdf")
+plt.savefig(args.outputdir + runname + "_plots/spacebox_left.png")
+plt.savefig(args.outputdir + runname + "_plots/spacebox_left.pdf")
 
 plt.figure(figsize=(15,10))
 for chamber in range(4):
@@ -487,8 +486,8 @@ for chamber in range(4):
     plt.title("Space box RIGHT [chamber %d]" % chamber)
     plt.xlabel("Position (mm)")
     plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(options.outputdir + runname + "_plots/spacebox_right.png")
-plt.savefig(options.outputdir + runname + "_plots/spacebox_right.pdf")
+plt.savefig(args.outputdir + runname + "_plots/spacebox_right.png")
+plt.savefig(args.outputdir + runname + "_plots/spacebox_right.pdf")
 
 
 # Occupancy
@@ -503,8 +502,8 @@ for chamber in range(4):
         plt.title("Occupancy [SL %d, LAYER %d]" % (chamber, layer+1))
         plt.xlabel("Wire number")
         plt.bar(x, y)
-plt.savefig(options.outputdir + runname + "_plots/occupancy.png")
-plt.savefig(options.outputdir + runname + "_plots/occupancy.pdf")
+plt.savefig(args.outputdir + runname + "_plots/occupancy.png")
+plt.savefig(args.outputdir + runname + "_plots/occupancy.pdf")
 
 
 
@@ -679,7 +678,7 @@ plt.savefig(options.outputdir + runname + "_plots/chi2.pdf")
 
 #print ev.head(60)
 
-if options.verbose: print("Done.")
+if args.verbose: print("Done.")
 
 
 
