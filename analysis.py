@@ -132,29 +132,27 @@ for filename in args.filenames:
     if filename.endswith('.dat'):
         from modules.unpacker import *
         unpk = Unpacker()
-        inputFile = open(args.filenames[0], 'rb')
+        inputFile = open(filename, 'rb')
         dt = unpk.unpack(inputFile, args.max)
 
-        if args.verbose: print("Read %d lines from binary file %s" % (len(dt), args.filenames))
-        df = df.append(pd.DataFrame.from_dict(dt))
+        if args.verbose: print("Read %d lines from binary file %s" % (len(dt), filename))
+        df = df.append(pd.DataFrame.from_dict(dt), ignore_index=True)
         
     elif filename.endswith('.txt') or filename.endswith('.csv'):
         # force 7 fields
         # in case of forcing, for some reason, the first raw is not interpreted as columns names
-        dt = pd.read_csv(args.filenames[0], \
+        dt = pd.read_csv(filename, \
             names=['HEAD', 'FPGA', 'TDC_CHANNEL', 'ORBIT_CNT', 'BX_COUNTER', 'TDC_MEAS', 'TRG_QUALITY'], \
             dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'int32', 'TRG_QUALITY' : 'float64'}, \
             low_memory=False, \
             skiprows=1, \
-            nrows=args.max*1024 + 1, \
+            nrows=args.max*1024 + 1 if args.max > 0 else 1e9, \
         )
-        if args.verbose: print("Read %d lines from txt file %s" % (len(df), args.filenames))
-        df = df.append(pd.DataFrame.from_dict(dt), ignore_index=True)
+        if args.verbose: print("Read %d lines from txt file %s" % (len(dt), filename))
+        df = df.append(dt, ignore_index=True)
 
     else:
         print("File format not recognized, skipping file...")
-
-if len(df) == 0: exit()
 
 if args.verbose: print(df.head(50))
 
@@ -267,7 +265,7 @@ if args.verbose: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 utime = datetime.now()
 if args.verbose: print("Unpacking completed [", utime, "],", "time elapsed [", utime - itime, "]")
 
-
+'''
 # Reconstruction
 events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0']]
 
@@ -316,14 +314,14 @@ for ievsl, hitlist in evs:
         seg_layer, seg_wire, seg_bx, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values
         
         # Fit
-        '''
-        pfit, stats = Polynomial.fit(posx, posz, 1, full=True, window=fitRange, domain=fitRange)
-        if len(stats[0]) > 0:
-            chi2 = stats[0][0] / max(nhits, 4)
-            p0, p1 = pfit
-            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
-        '''
+        
+        #pfit, stats = Polynomial.fit(posx, posz, 1, full=True, window=fitRange, domain=fitRange)
+        #if len(stats[0]) > 0:
+        #    chi2 = stats[0][0] / max(nhits, 4)
+        #    p0, p1 = pfit
+        #    if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
+        #        fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
+        
         pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
         if len(residuals) > 0:
             p1, p0 = pfit
@@ -416,7 +414,7 @@ for orbit, hitlist in evs:
 '''
     
     
-        
+'''        
         hits_sl = H.hits.loc[H.hits['sl'] == iSL].sort_values('layer')
 
         if True: #args.plot:
@@ -524,6 +522,18 @@ for chamber in range(4):
         plt.bar(x, y)
 plt.savefig(args.outputdir + runname + "_plots/occupancy.png")
 plt.savefig(args.outputdir + runname + "_plots/occupancy.pdf")
+
+
+# Multiplicity
+plt.figure(figsize=(15,10))
+for chamber in range(4):
+    plt.subplot(2, 2, chamber + 1)
+    plt.title("Multiplicity [SL %d]" % (chamber, ))
+    #plt.hist( hits.groupby(['ORBIT', 'CHAMBER'])['TDC_CHANNEL'].transform(np.size), bins=range(40), density=False )
+    plt.hist( hits[(hits['CHAMBER'] == chamber)].groupby('ORBIT')['TDC_CHANNEL'].count(), bins=range(40), density=False )
+    plt.xlabel("Number of hits")
+plt.savefig(args.outputdir + runname + "_plots/multiplicity.png")
+plt.savefig(args.outputdir + runname + "_plots/multiplicity.pdf")
 
 
 
