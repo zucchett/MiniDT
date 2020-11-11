@@ -10,6 +10,7 @@ from datetime import datetime
 from modules.mapping.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW, XCELL, ZCELL
 from modules.mapping import *
 from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, MEANTIMER_ANGLES, meantimereq, mean_tzero, tzero_clusters
+from modules.reco import config, plot
 
 import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
@@ -117,6 +118,61 @@ def meantimer_results(df_hits, verbose=False):
 
     return tzeros, angles
 
+
+### -------------------------------------------
+
+def segreco(hitlist):
+    global segments
+    iorbit, isl = hitlist.name
+    nhits = len(hitlist)
+    if nhits < 3 or nhits > 20:
+        if args.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
+        return
+    # Explicitly introduce left/right ambiguity
+    lhits, rhits = hitlist.copy(), hitlist.copy()
+    lhits['X_LABEL'] = 1
+    lhits['X'] = lhits['X_LEFT']
+    rhits['X_LABEL'] = 2
+    rhits['X'] = rhits['X_RIGHT']
+    lrhits = lhits.append(rhits, ignore_index=True) # Join the left and right hits
+    
+    # Compute all possible combinations in the most efficient way
+    layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(min(nhits, 4))]
+    all_combs = list(itertools.product(*layer_list))
+    if args.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations")
+    fitRange, fitResults = (hitlist['Z'].min() - 0.5*ZCELL, hitlist['Z'].max() + 0.5*ZCELL), []
+    
+    # Fitting each combination
+    for comb in all_combs:
+        lrcomb = lrhits.iloc[list(comb)]
+        # Try to reject improbable combinations: difference between adjacent wires should be 2 or smaller
+        if len(lrcomb) >= 3 and max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
+        posx, posz = lrcomb['X'], lrcomb['Z']
+        seg_layer, seg_wire, seg_bx, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values
+        
+        # Fit
+        pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
+        if len(residuals) > 0:
+            p1, p0 = pfit
+            chi2 = residuals[0] / max(nhits, 4)
+            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
+                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "pars" : [p0, p1]})
+        
+    fitResults.sort(key=lambda x: x["chi2"])
+
+    if len(fitResults) > 0:
+        segments = segments.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'CHAMBER' : [isl], 'NHITS' : [len(hitlist)], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]]}), ignore_index=True)
+        for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
+            x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
+            hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
+
+    return hitlist
+
+
+
+
+
+### -------------------------------------------
 
 itime = datetime.now()
 if args.verbose: print("Starting script [", itime, "]")
@@ -273,13 +329,13 @@ events['X'] = np.nan
 events['X_FIT'] = np.nan
 events['X_LABEL'] = 0
 
-seglist = []
+segments = pd.DataFrame()
 
 # Segment reconstruction
-from numpy.polynomial.polynomial import Polynomial
 
-from modules.reco import config, plot
+events = events.groupby(['ORBIT', 'CHAMBER'], as_index=False).apply(segreco)
 
+'''
 evs = events.groupby(['ORBIT', 'CHAMBER'])
 ievs, nevs = 0., len(evs)
 
@@ -332,18 +388,17 @@ for ievsl, hitlist in evs:
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
-        seglist.append({'ORBIT' : iorbit, 'CHAMBER' : isl, 'NHITS' : len(hitlist), 'P0' : fitResults[0]["pars"][0], "P1" : fitResults[0]["pars"][1], "CHI2" : fitResults[0]["chi2"]})
+        segments = segments.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'CHAMBER' : [isl], 'NHITS' : [len(hitlist)], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
             x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
             events.loc[(events['ORBIT'] == iorbit) & (events['BX'] == ibx) & (events['CHAMBER'] == isl) & (events['LAYER'] == ilayer) & (events['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
-
+'''
 events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
 events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
 
 rtime = datetime.now()
 if args.verbose: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
 
-segments = pd.DataFrame.from_dict(seglist)
 if args.verbose:
     print(events.head(50))
     print(segments.head(50))
