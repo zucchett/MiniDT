@@ -265,7 +265,7 @@ if args.verbose: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 utime = datetime.now()
 if args.verbose: print("Unpacking completed [", utime, "],", "time elapsed [", utime - itime, "]")
 
-'''
+
 # Reconstruction
 events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0']]
 
@@ -288,8 +288,8 @@ for ievsl, hitlist in evs:
     ievs += 1.
     iorbit, isl = ievsl
     nhits = len(hitlist)
-    if nhits > 20:
-        if args.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum number of hits (", nhits, ")")
+    if nhits < 3 or nhits > 20:
+        if args.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
         continue
     # Explicitly introduce left/right ambiguity
     lhits, rhits = hitlist.copy(), hitlist.copy()
@@ -309,7 +309,7 @@ for ievsl, hitlist in evs:
     for comb in all_combs:
         lrcomb = lrhits.iloc[list(comb)]
         # Try to reject improbable combinations: difference between adjacent wires should be 2 or smaller
-        if max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
+        if len(lrcomb) >= 3 and max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
         posx, posz = lrcomb['X'], lrcomb['Z']
         seg_layer, seg_wire, seg_bx, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values
         
@@ -411,7 +411,7 @@ for orbit, hitlist in evs:
     bokeh.io.output_file(args.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
     bokeh.io.save(bokeh.layouts.layout(plots))
 
-'''
+
     
     
 '''        
