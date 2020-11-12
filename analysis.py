@@ -121,7 +121,7 @@ def meantimer_results(df_hits, verbose=False):
 
 ### -------------------------------------------
 
-def segreco(hitlist):
+def recoSegments(hitlist):
     global segments
     iorbit, isl = hitlist.name
     nhits = len(hitlist)
@@ -161,18 +161,38 @@ def segreco(hitlist):
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
-        segments = segments.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'CHAMBER' : [isl], 'NHITS' : [len(hitlist)], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]]}), ignore_index=True)
+        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [[isl]], 'NHITS' : [nhits], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
             x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
             hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
 
     return hitlist
 
+### -------------------------------------------
 
-
-
+def recoTracks(hitlist):
+    global segments
+    iorbit = hitlist.name
+    
+    # Loop on the views (xz, yz)
+    for view, sls in GLOBAL_VIEW_SLs.items():
+        sl_ids = [sl.id for sl in sls]
+        viewhits = hitlist[(hitlist['CHAMBER'].isin(sl_ids)) & (hitlist['X'].notnull())]
+        nhits = len(viewhits)
+        if nhits < 3: continue
+        posxy, posz = viewhits[view[0].upper() + '_GLOB'], viewhits[view[1].upper() + '_GLOB']
+        # Fit
+        pfit, residuals, rank, singular_values, rcond = np.polyfit(posxy, posz, 1, full=True)
+        if len(residuals) > 0:
+            p1, p0 = pfit
+            chi2 = residuals[0] / nhits
+            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
+                segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [sl_ids], 'NHITS' : [nhits], 'P0' : [p0], "P1" : [p1], "CHI2" : [chi2]}), ignore_index=True)
+    
+    return hitlist
 
 ### -------------------------------------------
+
 
 itime = datetime.now()
 if args.verbose: print("Starting script [", itime, "]")
@@ -325,15 +345,34 @@ if args.verbose: print("Unpacking completed [", utime, "],", "time elapsed [", u
 # Reconstruction
 events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0']]
 
-events['X'] = np.nan
-events['X_FIT'] = np.nan
+events[['X', 'X_FIT']] = [np.nan, np.nan]
 events['X_LABEL'] = 0
+events['Y'] = 0.
+events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
 
 segments = pd.DataFrame()
 
-# Segment reconstruction
 
-events = events.groupby(['ORBIT', 'CHAMBER'], as_index=False).apply(segreco)
+# Reconstruction
+from modules.geometry.sl import SL
+from modules.geometry.segment import Segment
+from modules.geometry import Geometry, COOR_ID
+from modules.analysis import config as CONFIGURATION
+
+# Initialize geometry
+G = Geometry(CONFIGURATION)
+SLs = {}
+for iSL in config.SL_SHIFT.keys():
+    SLs[iSL] = SL(iSL, config.SL_SHIFT[iSL], config.SL_ROTATION[iSL])
+
+# Defining which SLs should be plotted in which global view
+GLOBAL_VIEW_SLs = {
+    'xz': [SLs[0], SLs[2]],
+    'yz': [SLs[1], SLs[3]]
+}
+
+events = events.groupby(['ORBIT', 'CHAMBER'], as_index=False).apply(recoSegments)
+
 
 '''
 evs = events.groupby(['ORBIT', 'CHAMBER'])
@@ -344,6 +383,18 @@ for ievsl, hitlist in evs:
     ievs += 1.
     iorbit, isl = ievsl
     nhits = len(hitlist)
+
+    # Global coordinates
+    
+    # Calculating the hit positions for each SL in the global reference frame
+    for iSL, sl in SLs.items():
+        slmask = hitlist['CHAMBER'] == iSL
+        # Updating global positions for left hits
+        pos_global = sl.coor_to_global(hitlist.loc[slmask, ['X', 'Y', 'Z']].values)
+        hitlist.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = pos_global
+    print(hitlist)
+
+
     if nhits < 3 or nhits > 20:
         if args.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
         continue
@@ -396,40 +447,33 @@ for ievsl, hitlist in evs:
 events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
 events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
 
+if args.verbose: print("Adding global positions [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
+
+# Updating global positions
+for iSL, sl in SLs.items():
+    slmask = events['CHAMBER'] == iSL
+    events.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X', 'Y', 'Z']].values)
+
+if args.verbose: print("Reconstructing tracks [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
+
+events = events.groupby('ORBIT', as_index=False).apply(recoTracks)
+
 rtime = datetime.now()
 if args.verbose: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
 
 if args.verbose:
     print(events.head(50))
-    print(segments.head(50))
+    print(segments.head(10))
+    print(segments.tail(10))
 
 # Output to csv files
 events.to_csv(args.outputdir + runname + "_csv/events.csv", header=True, index=False)
 segments.to_csv(args.outputdir + runname + "_csv/segments.csv", header=True, index=False)
 
+
+
 # Event display
-from modules.utils import OUT_CONFIG
-from modules.geometry.hit import HitManager
-from modules.geometry.sl import SL
-from modules.geometry.segment import Segment
-from modules.geometry import Geometry, COOR_ID
-from modules.reco import config, plot
-from modules.analysis import config as CONFIGURATION
-
 import bokeh
-
-# Initialize geometry
-G = Geometry(CONFIGURATION)
-H = HitManager()
-SLs = {}
-for iSL in config.SL_SHIFT.keys():
-    SLs[iSL] = SL(iSL, config.SL_SHIFT[iSL], config.SL_ROTATION[iSL])
-
-# Defining which SLs should be plotted in which global view
-GLOBAL_VIEW_SLs = {
-    'xz': [SLs[0], SLs[2]],
-    'yz': [SLs[1], SLs[3]]
-}
 
 evs = events.groupby(['ORBIT'])
 
@@ -452,14 +496,76 @@ for orbit, hitlist in evs:
         figs['sl'][iSL].circle(x=hitsl['X_RIGHT'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=0.5, line_width=0)
         figs['sl'][iSL].circle(x=hitsl['X'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=1., line_width=0)
         # Segments
-        if len(segments) > 0:
-            segsl = segments[(segments['ORBIT'] == orbit) & (segments['CHAMBER'] == iSL)]
-            for index, seg in segsl.iterrows():
-                #col = config.TRACK_COLORS[iR]
-                segz = [G.SL_FRAME['b']+1, G.SL_FRAME['t']-1]
-                segx = [((z - seg['P0']) / seg['P1']) for z in segz]
-                #print(segz, segx, seg['P1'], seg['P0'])
-                figs['sl'][iSL].line(x=np.array(segx), y=np.array(segz), line_color='black', line_alpha=0.7, line_width=3)
+        if len(segments) <= 0: continue
+        segsl = segments[(segments['VIEW'] == '0') & (segments['ORBIT'] == orbit) & (segments['CHAMBER'] == iSL)]
+        for index, seg in segsl.iterrows():
+            #col = config.TRACK_COLORS[iR]
+            segz = [G.SL_FRAME['b']+1, G.SL_FRAME['t']-1]
+            segx = [((z - seg['P0']) / seg['P1']) for z in segz]
+            #print(segz, segx, seg['P1'], seg['P0'])
+            figs['sl'][iSL].line(x=np.array(segx), y=np.array(segz), line_color='black', line_alpha=0.7, line_width=3)
+
+    # Global points
+    for view, sls in GLOBAL_VIEW_SLs.items():
+        sl_ids = [sl.id for sl in sls]
+        viewhits = hitlist.loc[hitlist['CHAMBER'].isin(sl_ids)]
+        figs['global'][view].circle(x=viewhits[view[0].upper() + '_GLOB'], y=viewhits[view[1].upper() + '_GLOB'], fill_color='black', fill_alpha=1., line_width=0)
+    
+        # Segments
+        if len(segments) <= 0: continue
+        tracks = segments[(segments['VIEW'] == view.upper()) & (segments['ORBIT'] == orbit)]
+        for index, trk in tracks.iterrows():
+            trkz = [plot.PLOT_RANGE['y'][0] + 1, plot.PLOT_RANGE['y'][1] - 1]
+            trkxy = [((z - trk['P0']) / trk['P1']) for z in trkz]
+            figs['global'][view].line(x=np.array(trkxy), y=np.array(trkz), line_color='black', line_alpha=0.7, line_width=3)
+
+    '''
+    # -------------------------------
+    
+    H.reset()
+    hits_lst = []
+    # Loop over hits and fill H object
+    for names, hit in hitlist.iterrows():
+        # format: 'sl', 'layer', 'wire', 'time'
+        hits_lst.append([hit['CHAMBER'], hit['LAYER'], hit['WIRE'], hit['TIMENS']]) 
+    
+    H.add_hits(hits_lst)
+    # Calculating local+global hit positions
+    H.calc_pos(SLs)
+
+    for view, sls in GLOBAL_VIEW_SLs.items():
+        sl_ids = [sl.id for sl in sls]
+        hits_sls = H.hits.loc[H.hits['sl'].isin(sl_ids)]
+        print(hits_sls)
+        figs['global'][view].square(x=hits_sls['glpos'+view[0]], y=hits_sls['glpos'+view[1]],
+                                    fill_color='red', fill_alpha=0.7, line_width=0)
+        figs['global'][view].square(x=hits_sls['grpos'+view[0]], y=hits_sls['grpos'+view[1]],
+                                    fill_color='blue', fill_alpha=0.7, line_width=0)
+        # Building 3D segments from the fit results in each SL
+        
+        #posz = np.array([G.SL_FRAME['b'], G.SL_FRAME['t']], dtype=np.float32)
+        #for sl in sls:
+        #    for iR, res in enumerate(sl_fit_results[sl.id][:5]):
+        #        posx = res[2](posz)
+        #        start = (posx[0], 0, posz[0])
+        #        end = (posx[1], 0, posz[1])
+        #        segL = Segment(start, end)
+        #        segG = segL.fromSL(sl)
+        #        segG.calc_vector()
+        #        # Extending the global segment to the full height of the view
+        #        start = segG.pointAtZ(plot.PLOT_RANGE['y'][0])
+        #        end = segG.pointAtZ(plot.PLOT_RANGE['y'][1])
+        #        # Getting XY coordinates of the global segment for the current view
+        #        iX = COOR_ID[view[0]]
+        #        posx = [start[iX], end[iX]]
+        #        posy = [start[2], end[2]]
+        #        # Drawing the segment
+        #        col = config.TRACK_COLORS[sl.id]
+        #        figs['global'][view].line(x=posx, y=posy,
+        #                             line_color=col, line_alpha=0.7, line_width=3)
+        
+    # -------------------------------
+    '''
 
     plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
     plots.append([figs['global'][v] for v in ['xz', 'yz']])
@@ -470,53 +576,29 @@ for orbit, hitlist in evs:
     
     
 '''        
-        hits_sl = H.hits.loc[H.hits['sl'] == iSL].sort_values('layer')
-
-        if True: #args.plot:
-            
-        # Performing track reconstruction in the local frame
-        sl_fit_results[iSL] = []
-        layer_groups = hits_sl.groupby('layer').groups
-        n_layers = len(layer_groups)
-        # Stopping if lass than 3 layers of hits
-        if n_layers < config.NHITS_MIN_LOCAL:
-            continue
-        hitid_layers = [gr.to_numpy() for gr_name, gr in layer_groups.items()]
-        # Building the list of all possible hit combinations with 1 hit from each layer
-        hits_layered = list(itertools.product(*hitid_layers))
-        # Building more combinations using only either left or right position of each hit
-        for hit_ids in hits_layered:
-            # print('- -', hit_ids)
-            posz = hits_sl.loc[hits_sl.index.isin(hit_ids), 'posz'].values
-            posx = hits_sl.loc[hits_sl.index.isin(hit_ids), ['lposx', 'rposx']].values
-            posx_combs = list(itertools.product(*posx))
-            # Fitting each combination
-            fit_results_lr = []
-            fit_range = (min(posz), max(posz))
-            for iC, posx_comb in enumerate(posx_combs):
-                pfit, stats = Polynomial.fit(posz, posx_comb, 1, full=True, window=fit_range, domain=fit_range)
-                chi2 = stats[0][0] / n_layers
-                if chi2 < config.FIT_CHI2_MAX:
-                    a0, a1 = pfit
-                    fit_results_lr.append((chi2, hit_ids, pfit))
-                    if options.verbose: print("Track found in SL", iSL, "with parameters:", a0, a1, ", chi2:", chi2)
-            # Keeping only the best fit result from the given set of physical hits
-            fit_results_lr.sort(key=itemgetter(0))
-            if fit_results_lr:
-                sl_fit_results[iSL].append(fit_results_lr[0])
-                bestp0, bestp1 = fit_results_lr[0][2]
-                print("+ Orbit", orbit, "best segment in SL", iSL, "with angle =", bestp1, "and offset =", bestp0, " ( chi2 =", fit_results_lr[0][0], ")")
-                chi2s[iSL] = np.append(chi2s[iSL], fit_results_lr[0][0])
-        # Sorting the fit results of a SL by Chi2
-        sl_fit_results[iSL].sort(key=itemgetter(0))
-        if sl_fit_results[iSL]:
-            # Drawing fitted tracks
-            posz = np.array([G.SL_FRAME['b']+1, G.SL_FRAME['t']-1], dtype=np.float32)
-            for iR, res in enumerate(sl_fit_results[iSL][:5]):
-                col = config.TRACK_COLORS[iR]
-                posx = res[2](posz)
-                figs['sl'][iSL].line(x=posx, y=posz,
-                                     line_color=col, line_alpha=0.7, line_width=3)
+        # Drawing the left and right hits in global frame
+        for view, sls in GLOBAL_VIEW_SLs.items():
+            # Building 3D segments from the fit results in each SL
+            posz = np.array([G.SL_FRAME['b'], G.SL_FRAME['t']], dtype=np.float32)
+            for sl in sls:
+                for iR, res in enumerate(sl_fit_results[sl.id][:5]):
+                    posx = res[2](posz)
+                    start = (posx[0], 0, posz[0])
+                    end = (posx[1], 0, posz[1])
+                    segL = Segment(start, end)
+                    segG = segL.fromSL(sl)
+                    segG.calc_vector()
+                    # Extending the global segment to the full height of the view
+                    start = segG.pointAtZ(plot.PLOT_RANGE['y'][0])
+                    end = segG.pointAtZ(plot.PLOT_RANGE['y'][1])
+                    # Getting XY coordinates of the global segment for the current view
+                    iX = COOR_ID[view[0]]
+                    posx = [start[iX], end[iX]]
+                    posy = [start[2], end[2]]
+                    # Drawing the segment
+                    col = config.TRACK_COLORS[sl.id]
+                    figs['global'][view].line(x=posx, y=posy,
+                                         line_color=col, line_alpha=0.7, line_width=3)
 '''
 
 
