@@ -519,87 +519,11 @@ for orbit, hitlist in evs:
             trkxy = [((z - trk['P0']) / trk['P1']) for z in trkz]
             figs['global'][view].line(x=np.array(trkxy), y=np.array(trkz), line_color='black', line_alpha=0.7, line_width=3)
 
-    '''
-    # -------------------------------
-    
-    H.reset()
-    hits_lst = []
-    # Loop over hits and fill H object
-    for names, hit in hitlist.iterrows():
-        # format: 'sl', 'layer', 'wire', 'time'
-        hits_lst.append([hit['CHAMBER'], hit['LAYER'], hit['WIRE'], hit['TIMENS']]) 
-    
-    H.add_hits(hits_lst)
-    # Calculating local+global hit positions
-    H.calc_pos(SLs)
-
-    for view, sls in GLOBAL_VIEW_SLs.items():
-        sl_ids = [sl.id for sl in sls]
-        hits_sls = H.hits.loc[H.hits['sl'].isin(sl_ids)]
-        print(hits_sls)
-        figs['global'][view].square(x=hits_sls['glpos'+view[0]], y=hits_sls['glpos'+view[1]],
-                                    fill_color='red', fill_alpha=0.7, line_width=0)
-        figs['global'][view].square(x=hits_sls['grpos'+view[0]], y=hits_sls['grpos'+view[1]],
-                                    fill_color='blue', fill_alpha=0.7, line_width=0)
-        # Building 3D segments from the fit results in each SL
-        
-        #posz = np.array([G.SL_FRAME['b'], G.SL_FRAME['t']], dtype=np.float32)
-        #for sl in sls:
-        #    for iR, res in enumerate(sl_fit_results[sl.id][:5]):
-        #        posx = res[2](posz)
-        #        start = (posx[0], 0, posz[0])
-        #        end = (posx[1], 0, posz[1])
-        #        segL = Segment(start, end)
-        #        segG = segL.fromSL(sl)
-        #        segG.calc_vector()
-        #        # Extending the global segment to the full height of the view
-        #        start = segG.pointAtZ(plot.PLOT_RANGE['y'][0])
-        #        end = segG.pointAtZ(plot.PLOT_RANGE['y'][1])
-        #        # Getting XY coordinates of the global segment for the current view
-        #        iX = COOR_ID[view[0]]
-        #        posx = [start[iX], end[iX]]
-        #        posy = [start[2], end[2]]
-        #        # Drawing the segment
-        #        col = config.TRACK_COLORS[sl.id]
-        #        figs['global'][view].line(x=posx, y=posy,
-        #                             line_color=col, line_alpha=0.7, line_width=3)
-        
-    # -------------------------------
-    '''
 
     plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
     plots.append([figs['global'][v] for v in ['xz', 'yz']])
     bokeh.io.output_file(args.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
     bokeh.io.save(bokeh.layouts.layout(plots))
-
-
-    
-    
-'''        
-        # Drawing the left and right hits in global frame
-        for view, sls in GLOBAL_VIEW_SLs.items():
-            # Building 3D segments from the fit results in each SL
-            posz = np.array([G.SL_FRAME['b'], G.SL_FRAME['t']], dtype=np.float32)
-            for sl in sls:
-                for iR, res in enumerate(sl_fit_results[sl.id][:5]):
-                    posx = res[2](posz)
-                    start = (posx[0], 0, posz[0])
-                    end = (posx[1], 0, posz[1])
-                    segL = Segment(start, end)
-                    segG = segL.fromSL(sl)
-                    segG.calc_vector()
-                    # Extending the global segment to the full height of the view
-                    start = segG.pointAtZ(plot.PLOT_RANGE['y'][0])
-                    end = segG.pointAtZ(plot.PLOT_RANGE['y'][1])
-                    # Getting XY coordinates of the global segment for the current view
-                    iX = COOR_ID[view[0]]
-                    posx = [start[iX], end[iX]]
-                    posy = [start[2], end[2]]
-                    # Drawing the segment
-                    col = config.TRACK_COLORS[sl.id]
-                    figs['global'][view].line(x=posx, y=posy,
-                                         line_color=col, line_alpha=0.7, line_width=3)
-'''
 
 
 
@@ -673,163 +597,6 @@ plt.savefig(args.outputdir + runname + "_plots/multiplicity.png")
 plt.savefig(args.outputdir + runname + "_plots/multiplicity.pdf")
 
 
-
-
-
-''' OLD RECONSTRUCTION, TO BE SUPERSEEDED
-
-# Event display
-if options.eventdisplay == 0:
-    if options.verbose: print("Skipping event display...\nDone.")
-    exit()
-
-if options.verbose: print("Producing event displays...")
-
-from pdb import set_trace as br
-from operator import itemgetter
-from numpy.polynomial.polynomial import Polynomial
-
-from modules.utils import OUT_CONFIG
-from modules.geometry.hit import HitManager
-from modules.geometry.sl import SL
-from modules.geometry.segment import Segment
-from modules.geometry import Geometry, COOR_ID
-from modules.reco import config, plot
-from modules.analysis import config as CONFIGURATION
-
-import os
-import itertools
-import bokeh
-import numpy as np
-
-G = Geometry(CONFIGURATION)
-H = HitManager()
-SLs = {}
-for iSL in config.SL_SHIFT.keys():
-    SLs[iSL] = SL(iSL, config.SL_SHIFT[iSL], config.SL_ROTATION[iSL])
-# Defining which SLs should be plotted in which global view
-GLOBAL_VIEW_SLs = {
-    'xz': [SLs[0], SLs[2]],
-    'yz': [SLs[1], SLs[3]]
-}
-
-chi2s = {}
-for iSL, sl in SLs.items(): chi2s[iSL] = np.array([])
-
-evs = events.groupby(['ORBIT'])
-# Loop on events (same orbit)
-for orbit, hitlist in evs:
-    if options.verbose: print("Drawing event", orbit, "...")
-    H.reset()
-    hits_lst = []
-    # Loop over hits and fill H object
-    for names, hit in hitlist.iterrows():
-        # format: 'sl', 'layer', 'wire', 'time'
-        hits_lst.append([hit['CHAMBER'], hit['LAYER'], hit['WIRE'], hit['TIMENS']]) 
-    
-    H.add_hits(hits_lst)
-    # Calculating local+global hit positions
-    H.calc_pos(SLs)
-    # Creating figures of the chambers
-    figs = {}
-    figs['sl'] = plot.book_chambers_figure(G)
-    figs['global'] = plot.book_global_figure(G, GLOBAL_VIEW_SLs)
-    # Analyzing hits in each SL
-    sl_fit_results = {}
-    
-    for iSL, sl in SLs.items():
-        
-        hits_sl = H.hits.loc[H.hits['sl'] == iSL].sort_values('layer')
-
-        if True: #args.plot:
-            # Drawing the left and right hits in local frame
-            figs['sl'][iSL].square(x=hits_sl['lposx'], y=hits_sl['posz'], size=5, fill_color='red', fill_alpha=0.7, line_width=0)
-            figs['sl'][iSL].square(x=hits_sl['rposx'], y=hits_sl['posz'], size=5, fill_color='blue', fill_alpha=0.7, line_width=0)
-        # Performing track reconstruction in the local frame
-        sl_fit_results[iSL] = []
-        layer_groups = hits_sl.groupby('layer').groups
-        n_layers = len(layer_groups)
-        # Stopping if lass than 3 layers of hits
-        if n_layers < config.NHITS_MIN_LOCAL:
-            continue
-        hitid_layers = [gr.to_numpy() for gr_name, gr in layer_groups.items()]
-        # Building the list of all possible hit combinations with 1 hit from each layer
-        hits_layered = list(itertools.product(*hitid_layers))
-        # Building more combinations using only either left or right position of each hit
-        for hit_ids in hits_layered:
-            # print('- -', hit_ids)
-            posz = hits_sl.loc[hits_sl.index.isin(hit_ids), 'posz'].values
-            posx = hits_sl.loc[hits_sl.index.isin(hit_ids), ['lposx', 'rposx']].values
-            posx_combs = list(itertools.product(*posx))
-            # Fitting each combination
-            fit_results_lr = []
-            fit_range = (min(posz), max(posz))
-            for iC, posx_comb in enumerate(posx_combs):
-                pfit, stats = Polynomial.fit(posz, posx_comb, 1, full=True, window=fit_range, domain=fit_range)
-                chi2 = stats[0][0] / n_layers
-                if chi2 < config.FIT_CHI2_MAX:
-                    a0, a1 = pfit
-                    fit_results_lr.append((chi2, hit_ids, pfit))
-                    if options.verbose: print("Track found in SL", iSL, "with parameters:", a0, a1, ", chi2:", chi2)
-            # Keeping only the best fit result from the given set of physical hits
-            fit_results_lr.sort(key=itemgetter(0))
-            if fit_results_lr:
-                sl_fit_results[iSL].append(fit_results_lr[0])
-                bestp0, bestp1 = fit_results_lr[0][2]
-                print("+ Orbit", orbit, "best segment in SL", iSL, "with angle =", bestp1, "and offset =", bestp0, " ( chi2 =", fit_results_lr[0][0], ")")
-                chi2s[iSL] = np.append(chi2s[iSL], fit_results_lr[0][0])
-        # Sorting the fit results of a SL by Chi2
-        sl_fit_results[iSL].sort(key=itemgetter(0))
-        if sl_fit_results[iSL]:
-            # Drawing fitted tracks
-            posz = np.array([G.SL_FRAME['b']+1, G.SL_FRAME['t']-1], dtype=np.float32)
-            for iR, res in enumerate(sl_fit_results[iSL][:5]):
-                col = config.TRACK_COLORS[iR]
-                posx = res[2](posz)
-                figs['sl'][iSL].line(x=posx, y=posz,
-                                     line_color=col, line_alpha=0.7, line_width=3)
-
-    if True: #args.plot:
-        # Drawing the left and right hits in global frame
-        for view, sls in GLOBAL_VIEW_SLs.items():
-            sl_ids = [sl.id for sl in sls]
-            hits_sls = H.hits.loc[H.hits['sl'].isin(sl_ids)]
-            figs['global'][view].square(x=hits_sls['glpos'+view[0]], y=hits_sls['glpos'+view[1]],
-                                        fill_color='red', fill_alpha=0.7, line_width=0)
-            figs['global'][view].square(x=hits_sls['grpos'+view[0]], y=hits_sls['grpos'+view[1]],
-                                        fill_color='blue', fill_alpha=0.7, line_width=0)
-            # Building 3D segments from the fit results in each SL
-            posz = np.array([G.SL_FRAME['b'], G.SL_FRAME['t']], dtype=np.float32)
-            for sl in sls:
-                for iR, res in enumerate(sl_fit_results[sl.id][:5]):
-                    posx = res[2](posz)
-                    start = (posx[0], 0, posz[0])
-                    end = (posx[1], 0, posz[1])
-                    segL = Segment(start, end)
-                    segG = segL.fromSL(sl)
-                    segG.calc_vector()
-                    # Extending the global segment to the full height of the view
-                    start = segG.pointAtZ(plot.PLOT_RANGE['y'][0])
-                    end = segG.pointAtZ(plot.PLOT_RANGE['y'][1])
-                    # Getting XY coordinates of the global segment for the current view
-                    iX = COOR_ID[view[0]]
-                    posx = [start[iX], end[iX]]
-                    posy = [start[2], end[2]]
-                    # Drawing the segment
-                    col = config.TRACK_COLORS[sl.id]
-                    figs['global'][view].line(x=posx, y=posy,
-                                         line_color=col, line_alpha=0.7, line_width=3)
-
-
-
-    # Storing the figures to an HTML file
-    if True: #args.plot:
-        plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
-        plots.append([figs['global'][v] for v in ['xz', 'yz']])
-        bokeh.io.output_file(options.outputdir + runname + "_events/orbit_%d.html" % orbit, mode='cdn')
-        bokeh.io.save(bokeh.layouts.layout(plots))
-
-
 # Chi2
 plt.figure(figsize=(15,10))
 for chamber in range(4):
@@ -841,12 +608,8 @@ for chamber in range(4):
 plt.savefig(options.outputdir + runname + "_plots/chi2.png")
 plt.savefig(options.outputdir + runname + "_plots/chi2.pdf")
 
-'''
-
-#print ev.head(60)
 
 if args.verbose: print("Done.")
-
 
 
 # python analysis.py -i data/Run000966/output_raw.dat -m 1 -v
