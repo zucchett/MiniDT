@@ -15,7 +15,7 @@ from modules.reco import config, plot
 import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
 parser.add_argument("-d", "--display", action="store", type=int, default=0, dest="display", help="Number of event to display")
-parser.add_argument("-e", "--event", action="store", type=int, default=0, dest="event", help="Inspect a signle event")
+parser.add_argument("-e", "--event", action="store", type=int, default=0, dest="event", help="Inspect a single event")
 parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
@@ -130,8 +130,10 @@ def recoSegments(hitlist):
         return
     # Explicitly introduce left/right ambiguity
     lhits, rhits = hitlist.copy(), hitlist.copy()
+    lhits['HIT_INDEX'] = hitlist.index
     lhits['X_LABEL'] = 1
     lhits['X'] = lhits['X_LEFT']
+    rhits['HIT_INDEX'] = hitlist.index
     rhits['X_LABEL'] = 2
     rhits['X'] = rhits['X_RIGHT']
     lrhits = lhits.append(rhits, ignore_index=True) # Join the left and right hits
@@ -148,7 +150,7 @@ def recoSegments(hitlist):
         # Try to reject improbable combinations: difference between adjacent wires should be 2 or smaller
         if len(lrcomb) >= 3 and max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
         posx, posz = lrcomb['X'], lrcomb['Z']
-        seg_layer, seg_wire, seg_bx, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values
+        seg_layer, seg_wire, seg_bx, seg_label, seg_idx = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values, lrcomb['HIT_INDEX'].values
         
         # Fit
         pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
@@ -156,12 +158,12 @@ def recoSegments(hitlist):
             p1, p0 = pfit
             chi2 = residuals[0] / max(nhits, 4)
             if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "pars" : [p0, p1]})
+                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "pars" : [p0, p1], "idx" : seg_idx})
         
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
-        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [[isl]], 'NHITS' : [nhits], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]]}), ignore_index=True)
+        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [nhits], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]], "HIT_INDEX" : [seg_idx]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
             x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
             hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
@@ -173,7 +175,7 @@ def recoSegments(hitlist):
 def recoTracks(hitlist):
     global segments
     iorbit = hitlist.name
-    
+
     # Loop on the views (xz, yz)
     for view, sls in GLOBAL_VIEW_SLs.items():
         sl_ids = [sl.id for sl in sls]
@@ -187,7 +189,7 @@ def recoTracks(hitlist):
             p1, p0 = pfit
             chi2 = residuals[0] / nhits
             if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-                segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [sl_ids], 'NHITS' : [nhits], 'P0' : [p0], "P1" : [p1], "CHI2" : [chi2]}), ignore_index=True)
+                segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [tuple(sl_ids)], 'NHITS' : [nhits], 'P0' : [p0], "P1" : [p1], "CHI2" : [chi2], "HIT_INDEX": [list(viewhits.index)]}), ignore_index=True)
     
     return hitlist
 
@@ -466,6 +468,7 @@ if args.verbose:
     print(segments.head(10))
     print(segments.tail(10))
 
+
 # Output to csv files
 events.to_csv(args.outputdir + runname + "_csv/events.csv", header=True, index=False)
 segments.to_csv(args.outputdir + runname + "_csv/segments.csv", header=True, index=False)
@@ -524,89 +527,6 @@ for orbit, hitlist in evs:
     plots.append([figs['global'][v] for v in ['xz', 'yz']])
     bokeh.io.output_file(args.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
     bokeh.io.save(bokeh.layouts.layout(plots))
-
-
-
-# General plots
-
-if args.verbose: print("Producing general plots...")
-
-import matplotlib.pyplot as plt
-
-if args.verbose: print("Writing plots in directory %s" % (args.outputdir + runname))
-
-# Timebox
-plt.figure(figsize=(15,10))
-for chamber in range(4):
-    hist, bins = np.histogram(hits.loc[hits['CHAMBER']==chamber, 'TIMENS'], density=False, bins=80, range=(-150, 650))
-    plt.subplot(2, 2, chamber+1)
-    plt.title("Timebox [chamber %d]" % chamber)
-    plt.xlabel("Time (ns)")
-    plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(args.outputdir + runname + "_plots/timebox.png")
-plt.savefig(args.outputdir + runname + "_plots/timebox.pdf")
-
-
-# Space boxes
-plt.figure(figsize=(15,10))
-for chamber in range(4):
-    hist, bins = np.histogram(hits.loc[hits['CHAMBER']==chamber, 'X_LEFT'], density=False, bins=70, range=(-5, 30))
-    plt.subplot(2, 2, chamber+1)
-    plt.title("Space box LEFT [chamber %d]" % chamber)
-    plt.xlabel("Position (mm)")
-    plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(args.outputdir + runname + "_plots/spacebox_left.png")
-plt.savefig(args.outputdir + runname + "_plots/spacebox_left.pdf")
-
-plt.figure(figsize=(15,10))
-for chamber in range(4):
-    hist, bins = np.histogram(hits.loc[hits['CHAMBER']==chamber, 'X_RIGHT'], density=False, bins=70, range=(-5, 30))
-    plt.subplot(2, 2, chamber+1)
-    plt.title("Space box RIGHT [chamber %d]" % chamber)
-    plt.xlabel("Position (mm)")
-    plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(args.outputdir + runname + "_plots/spacebox_right.png")
-plt.savefig(args.outputdir + runname + "_plots/spacebox_right.pdf")
-
-
-# Occupancy
-plt.figure(figsize=(15,20))
-occupancy = hits.groupby(["CHAMBER", "LAYER", "WIRE"])['HEAD'].count() # count performed a random column
-occupancy = occupancy.reset_index().rename(columns={'HEAD' : 'COUNTS'}) # reset the indices and make new ones, because the old indices are needed for selection
-for chamber in range(4):
-    for layer in range(4):
-        x = np.array( occupancy.loc[((occupancy['CHAMBER'] == chamber) & (occupancy['LAYER'] == layer+1)), 'WIRE'] )
-        y = np.array( occupancy.loc[((occupancy['CHAMBER'] == chamber) & (occupancy['LAYER'] == layer+1)), 'COUNTS'] )
-        plt.subplot(4, 4, chamber*4 + layer + 1)
-        plt.title("Occupancy [SL %d, LAYER %d]" % (chamber, layer+1))
-        plt.xlabel("Wire number")
-        plt.bar(x, y)
-plt.savefig(args.outputdir + runname + "_plots/occupancy.png")
-plt.savefig(args.outputdir + runname + "_plots/occupancy.pdf")
-
-
-# Multiplicity
-plt.figure(figsize=(15,10))
-for chamber in range(4):
-    plt.subplot(2, 2, chamber + 1)
-    plt.title("Multiplicity [SL %d]" % (chamber, ))
-    #plt.hist( hits.groupby(['ORBIT', 'CHAMBER'])['TDC_CHANNEL'].transform(np.size), bins=range(40), density=False )
-    plt.hist( hits[(hits['CHAMBER'] == chamber)].groupby('ORBIT')['TDC_CHANNEL'].count(), bins=range(40), density=False )
-    plt.xlabel("Number of hits")
-plt.savefig(args.outputdir + runname + "_plots/multiplicity.png")
-plt.savefig(args.outputdir + runname + "_plots/multiplicity.pdf")
-
-
-# Chi2
-plt.figure(figsize=(15,10))
-for chamber in range(4):
-    hist, bins = np.histogram(chi2s[chamber], density=False, bins=20, range=(0, 2))
-    plt.subplot(2, 2, chamber+1)
-    plt.title("Chi2 [chamber %d]" % chamber)
-    plt.xlabel("Chi2")
-    plt.bar((bins[:-1] + bins[1:]) / 2, hist, align='center', width=np.diff(bins))
-plt.savefig(options.outputdir + runname + "_plots/chi2.png")
-plt.savefig(options.outputdir + runname + "_plots/chi2.pdf")
 
 
 if args.verbose: print("Done.")
