@@ -122,7 +122,7 @@ def meantimer_results(df_hits, verbose=False):
 ### -------------------------------------------
 
 def recoSegments(hitlist):
-    global segments
+    global segments, missinghits
     iorbit, isl = hitlist.name
     nhits = len(hitlist)
     if nhits < 3 or nhits > 20:
@@ -158,21 +158,26 @@ def recoSegments(hitlist):
         pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
         if len(residuals) > 0:
             p1, p0 = pfit
-            chi2 = residuals[0] / max(nhits, 4)
+            chi2 = residuals[0] / len(seg_idx)
             if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "pars" : [p0, p1], "idx" : seg_idx})
+                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "nhits" : len(seg_idx), "pars" : [p0, p1], "idx" : seg_idx})
         
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
-        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [nhits], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]], "HIT_INDEX" : [seg_idx]}), ignore_index=True)
+        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [fitResults[0]["nhits"]], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]], "HIT_INDEX" : [seg_idx]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
             x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
             hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
 
-            # Missing hit interpolation
-            #if(nhits <= 3):
-                
+        # Missing hit interpolation
+        if(fitResults[0]["nhits"] == 3):
+            layers = list(hitlist['LAYER'])
+            m_layer = [x for x in np.arange(1, 4+1) if not x in layers][0]
+            m_zhit = mapconverter.getZlayer(m_layer)
+            m_xhit = (m_zhit - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
+            m_wire_num = mapconverter.getWireNumber(m_xhit, m_layer)
+            missinghits = missinghits.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'BX' : [np.nan], 'CHAMBER' : [isl], 'LAYER' : [m_layer], 'WIRE' : [m_wire_num], "X" : [m_xhit], "Y" : [0.], "Z" : [m_zhit]}), ignore_index=True)
 
     return hitlist
 
@@ -359,7 +364,7 @@ events['Y'] = 0.
 events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
 
 segments = pd.DataFrame()
-
+missinghits = pd.DataFrame()
 
 # Reconstruction
 from modules.geometry.sl import SL
@@ -462,7 +467,10 @@ for iSL, sl in SLs.items():
     slmask = events['CHAMBER'] == iSL
     events.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X', 'Y', 'Z']].values)
     events.loc[slmask, ['X_LEFT_GLOB', 'Y_LEFT_GLOB', 'Z_LEFT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_LEFT', 'Y', 'Z']].values)
-    events.loc[slmask, ['X_RIGHT_GLOB', 'Y_RIGHT_GLOB', 'Z_RIGHT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_RIGHT', 'Y', 'Z']].values)  
+    events.loc[slmask, ['X_RIGHT_GLOB', 'Y_RIGHT_GLOB', 'Z_RIGHT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_RIGHT', 'Y', 'Z']].values)
+    slmask = missinghits['CHAMBER'] == iSL
+    missinghits.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = sl.coor_to_global(missinghits.loc[slmask, ['X', 'Y', 'Z']].values)
+
 
 if args.verbose: print("Reconstructing tracks [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
 
@@ -475,11 +483,13 @@ if args.verbose:
     print(events.head(50))
     print(segments.head(10))
     print(segments.tail(10))
+    print(missinghits.tail(10))
 
 
 # Output to csv files
 events.to_csv(args.outputdir + runname + "_csv/events.csv", header=True, index=False)
 segments.to_csv(args.outputdir + runname + "_csv/segments.csv", header=True, index=False)
+missinghits.to_csv(args.outputdir + runname + "_csv/missinghits.csv", header=True, index=False)
 
 if args.verbose: print("Output files saved in directory", args.outputdir + runname + "_csv/")
 
@@ -504,9 +514,12 @@ for orbit, hitlist in evs:
     for iSL, sl in SLs.items():
         # Hits
         hitsl = hitlist[hitlist['CHAMBER'] == iSL]
-        figs['sl'][iSL].circle(x=hitsl['X_LEFT'].values, y=hitsl['Z'], size=5, fill_color='green', fill_alpha=0.5, line_width=0)
-        figs['sl'][iSL].circle(x=hitsl['X_RIGHT'].values, y=hitsl['Z'], size=5, fill_color='red', fill_alpha=0.5, line_width=0)
-        figs['sl'][iSL].circle(x=hitsl['X'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=1., line_width=0)
+        m_hitsl = missinghits[(missinghits['ORBIT'] == orbit) & (missinghits['CHAMBER'] == iSL)]
+        figs['sl'][iSL].circle(x=hitsl['X_LEFT'], y=hitsl['Z'], size=5, fill_color='green', fill_alpha=0.5, line_width=0)
+        figs['sl'][iSL].circle(x=hitsl['X_RIGHT'], y=hitsl['Z'], size=5, fill_color='red', fill_alpha=0.5, line_width=0)
+        figs['sl'][iSL].circle(x=hitsl['X'], y=hitsl['Z'], size=5, fill_color='black', fill_alpha=1., line_width=0)
+        if len(m_hitsl) > 0: figs['sl'][iSL].cross(x=m_hitsl['X'], y=m_hitsl['Z'], size=10, line_color='blue', fill_alpha=0.7, line_width=2, angle=0.785398)
+        
         # Segments
         if len(segments) <= 0: continue
         segsl = segments[(segments['VIEW'] == '0') & (segments['ORBIT'] == orbit) & (segments['CHAMBER'] == iSL)]
@@ -520,11 +533,13 @@ for orbit, hitlist in evs:
     # Global points
     for view, sls in GLOBAL_VIEW_SLs.items():
         sl_ids = [sl.id for sl in sls]
-        viewhits = hitlist.loc[hitlist['CHAMBER'].isin(sl_ids)]
+        viewhits = hitlist[hitlist['CHAMBER'].isin(sl_ids)]
+        m_viewhits = missinghits[(missinghits['ORBIT'] == orbit) & (missinghits['CHAMBER'].isin(sl_ids))]
         figs['global'][view].circle(x=viewhits[view[0].upper() + '_LEFT_GLOB'], y=viewhits[view[1].upper() + '_LEFT_GLOB'], fill_color='green', fill_alpha=0.5, line_width=0)
         figs['global'][view].circle(x=viewhits[view[0].upper() + '_RIGHT_GLOB'], y=viewhits[view[1].upper() + '_RIGHT_GLOB'], fill_color='red', fill_alpha=0.5, line_width=0)
         figs['global'][view].circle(x=viewhits[view[0].upper() + '_GLOB'], y=viewhits[view[1].upper() + '_GLOB'], fill_color='black', fill_alpha=1., line_width=0)
-    
+        if len(m_viewhits) > 0: figs['global'][view].cross(x=m_viewhits[view[0].upper() + '_GLOB'], y=m_viewhits[view[1].upper() + '_GLOB'], size=10, line_color='blue', fill_alpha=0.7, line_width=2, angle=0.785398)
+
         # Segments
         if len(segments) <= 0: continue
         tracks = segments[(segments['VIEW'] == view.upper()) & (segments['ORBIT'] == orbit)]

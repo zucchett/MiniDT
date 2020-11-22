@@ -68,3 +68,17 @@ class Mapping:
     def addXleftright(self, df):
         df['X_LEFT']  = df['WIRE_POS'] - np.maximum(df['TDRIFT'], 0)*config.VDRIFT
         df['X_RIGHT'] = df['WIRE_POS'] + np.maximum(df['TDRIFT'], 0)*config.VDRIFT
+
+
+    '''Get single values'''
+    def getZlayer(self, layer): # Input Layer is between [1, 4]
+        l = config.layer_z[layer - 1]
+        return config.posshift_z[l - 1] #if layer < len(config.posshift_z) else -99.
+
+    def getWireNumber(self, x, layer): # Input Layer is between [1, 4]
+        l = config.layer_z[layer - 1]
+        return int(round((x - config.posshift_x[l - 1]) / config.XCELL) + 1)
+    
+    def getWirePosition(self, wire_num, layer): # Input Layer is between [1, 4]
+        l = config.layer_z[layer - 1]
+        return (wire_num - 1) * config.XCELL + posshift_x[l - 1]
