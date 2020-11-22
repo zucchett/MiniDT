@@ -139,7 +139,9 @@ def recoSegments(hitlist):
     lrhits = lhits.append(rhits, ignore_index=True) # Join the left and right hits
     
     # Compute all possible combinations in the most efficient way
-    layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(min(nhits, 4))]
+    #layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(4)]
+    layers = list(lrhits['LAYER'].unique())
+    layer_list = [list(lrhits[lrhits['LAYER'] == x].index) for x in layers]
     all_combs = list(itertools.product(*layer_list))
     if args.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations")
     fitRange, fitResults = (hitlist['Z'].min() - 0.5*ZCELL, hitlist['Z'].max() + 0.5*ZCELL), []
@@ -168,6 +170,10 @@ def recoSegments(hitlist):
             x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
             hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
 
+            # Missing hit interpolation
+            #if(nhits <= 3):
+                
+
     return hitlist
 
 ### -------------------------------------------
@@ -188,7 +194,7 @@ def recoTracks(hitlist):
         if len(residuals) > 0:
             p1, p0 = pfit
             chi2 = residuals[0] / nhits
-            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
+            if chi2 < 25. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
                 segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [tuple(sl_ids)], 'NHITS' : [nhits], 'P0' : [p0], "P1" : [p1], "CHI2" : [chi2], "HIT_INDEX": [list(viewhits.index)]}), ignore_index=True)
     
     return hitlist
@@ -455,6 +461,8 @@ if args.verbose: print("Adding global positions [", datetime.now(), "],", "time 
 for iSL, sl in SLs.items():
     slmask = events['CHAMBER'] == iSL
     events.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X', 'Y', 'Z']].values)
+    events.loc[slmask, ['X_LEFT_GLOB', 'Y_LEFT_GLOB', 'Z_LEFT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_LEFT', 'Y', 'Z']].values)
+    events.loc[slmask, ['X_RIGHT_GLOB', 'Y_RIGHT_GLOB', 'Z_RIGHT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_RIGHT', 'Y', 'Z']].values)  
 
 if args.verbose: print("Reconstructing tracks [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
 
@@ -473,6 +481,7 @@ if args.verbose:
 events.to_csv(args.outputdir + runname + "_csv/events.csv", header=True, index=False)
 segments.to_csv(args.outputdir + runname + "_csv/segments.csv", header=True, index=False)
 
+if args.verbose: print("Output files saved in directory", args.outputdir + runname + "_csv/")
 
 
 # Event display
@@ -495,15 +504,15 @@ for orbit, hitlist in evs:
     for iSL, sl in SLs.items():
         # Hits
         hitsl = hitlist[hitlist['CHAMBER'] == iSL]
-        figs['sl'][iSL].circle(x=hitsl['X_LEFT'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=0.5, line_width=0)
-        figs['sl'][iSL].circle(x=hitsl['X_RIGHT'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=0.5, line_width=0)
+        figs['sl'][iSL].circle(x=hitsl['X_LEFT'].values, y=hitsl['Z'], size=5, fill_color='green', fill_alpha=0.5, line_width=0)
+        figs['sl'][iSL].circle(x=hitsl['X_RIGHT'].values, y=hitsl['Z'], size=5, fill_color='red', fill_alpha=0.5, line_width=0)
         figs['sl'][iSL].circle(x=hitsl['X'].values, y=hitsl['Z'], size=5, fill_color='black', fill_alpha=1., line_width=0)
         # Segments
         if len(segments) <= 0: continue
         segsl = segments[(segments['VIEW'] == '0') & (segments['ORBIT'] == orbit) & (segments['CHAMBER'] == iSL)]
         for index, seg in segsl.iterrows():
             #col = config.TRACK_COLORS[iR]
-            segz = [G.SL_FRAME['b']+1, G.SL_FRAME['t']-1]
+            segz = [G.SL_FRAME['b'], G.SL_FRAME['t']]
             segx = [((z - seg['P0']) / seg['P1']) for z in segz]
             #print(segz, segx, seg['P1'], seg['P0'])
             figs['sl'][iSL].line(x=np.array(segx), y=np.array(segz), line_color='black', line_alpha=0.7, line_width=3)
@@ -512,6 +521,8 @@ for orbit, hitlist in evs:
     for view, sls in GLOBAL_VIEW_SLs.items():
         sl_ids = [sl.id for sl in sls]
         viewhits = hitlist.loc[hitlist['CHAMBER'].isin(sl_ids)]
+        figs['global'][view].circle(x=viewhits[view[0].upper() + '_LEFT_GLOB'], y=viewhits[view[1].upper() + '_LEFT_GLOB'], fill_color='green', fill_alpha=0.5, line_width=0)
+        figs['global'][view].circle(x=viewhits[view[0].upper() + '_RIGHT_GLOB'], y=viewhits[view[1].upper() + '_RIGHT_GLOB'], fill_color='red', fill_alpha=0.5, line_width=0)
         figs['global'][view].circle(x=viewhits[view[0].upper() + '_GLOB'], y=viewhits[view[1].upper() + '_GLOB'], fill_color='black', fill_alpha=1., line_width=0)
     
         # Segments
@@ -527,6 +538,7 @@ for orbit, hitlist in evs:
     plots.append([figs['global'][v] for v in ['xz', 'yz']])
     bokeh.io.output_file(args.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
     bokeh.io.save(bokeh.layouts.layout(plots))
+    if args.verbose: print("Event dispaly number", orbit, "saved in", args.outputdir + runname + "_display/")
 
 
 if args.verbose: print("Done.")
