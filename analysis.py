@@ -20,7 +20,7 @@ parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="d
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
 parser.add_argument("-x", "--meantimer", action="store_true", default=False, dest="meantimer", help="Force application of the meantimer algorithm (override BX assignment)")
-parser.add_argument("-v", "--verbose", action="store_true", default=False, dest="verbose", help="Increase verbosity")
+parser.add_argument("-v", "--verbose", action="store", type=int, default=0, dest="verbose", help="Specify verbosity level")
 args = parser.parse_args()
 
 runname = [x for x in args.filenames[0].split('/') if 'Run' in x][0] if "Run" in args.filenames[0] else "Run000000"
@@ -50,6 +50,10 @@ for d in ["plots", "display", "csv"]:
 
 
 def meantimer(adf):
+    global nEvSl, iEvSl
+    iEvSl += 1
+    if args.verbose == 1 and iEvSl % 100 == 0: print("Running meantimer [%.2f %%]" % (100.*iEvSl/nEvSl), end='\r')
+
     adf = adf.drop_duplicates() 
     tzeros, angles = meantimer_results(adf)
     adf['T0'] = np.mean(tzeros) if len(tzeros) > 0 else np.nan
@@ -122,11 +126,15 @@ def meantimer_results(df_hits, verbose=False):
 ### -------------------------------------------
 
 def recoSegments(hitlist):
+    global nEvSl, iEvSl
+    iEvSl += 1
+    if args.verbose == 1 and iEvSl % 100 == 0: print("Running segment reconstruction [%.2f %%]" % (100.*iEvSl/nEvSl), end='\r')
+
     global segments, missinghits
     iorbit, isl = hitlist.name
     nhits = len(hitlist)
     if nhits < 3 or nhits > 20:
-        if args.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
+        if args.verbose >= 2: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
         return
     # Explicitly introduce left/right ambiguity
     lhits, rhits = hitlist.copy(), hitlist.copy()
@@ -143,7 +151,7 @@ def recoSegments(hitlist):
     layers = list(lrhits['LAYER'].unique())
     layer_list = [list(lrhits[lrhits['LAYER'] == x].index) for x in layers]
     all_combs = list(itertools.product(*layer_list))
-    if args.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations")
+    if args.verbose >= 2: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations [%.2f %%]" % (100.*iEvSl/nEvSl)) #, end='\r'
     fitRange, fitResults = (hitlist['Z'].min() - 0.5*ZCELL, hitlist['Z'].max() + 0.5*ZCELL), []
     
     # Fitting each combination
@@ -165,7 +173,7 @@ def recoSegments(hitlist):
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
-        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [fitResults[0]["nhits"]], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]], "HIT_INDEX" : [seg_idx]}), ignore_index=True)
+        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [fitResults[0]["nhits"]], 'P0' : [fitResults[0]["pars"][0]], 'P1' : [fitResults[0]["pars"][1]], 'CHI2' : [fitResults[0]["chi2"]], 'HIT_INDEX' : [seg_idx]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
             x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
             hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
@@ -177,13 +185,17 @@ def recoSegments(hitlist):
             m_zhit = mapconverter.getZlayer(m_layer)
             m_xhit = (m_zhit - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
             m_wire_num = mapconverter.getWireNumber(m_xhit, m_layer)
-            missinghits = missinghits.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'BX' : [np.nan], 'CHAMBER' : [isl], 'LAYER' : [m_layer], 'WIRE' : [m_wire_num], "X" : [m_xhit], "Y" : [0.], "Z" : [m_zhit]}), ignore_index=True)
+            missinghits = missinghits.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'BX' : [np.nan], 'CHAMBER' : [isl], 'LAYER' : [m_layer], 'WIRE' : [m_wire_num], 'X' : [m_xhit], 'Y' : [0.], 'Z' : [m_zhit]}), ignore_index=True)
 
     return hitlist
 
 ### -------------------------------------------
 
 def recoTracks(hitlist):
+    global nEvSl, iEvSl
+    iEvSl += 1
+    if args.verbose == 1 and iEvSl % 100 == 0: print("Running track reconstruction [%.2f %%]" % (100.*iEvSl/nEvSl), end='\r')
+
     global segments
     iorbit = hitlist.name
 
@@ -206,13 +218,12 @@ def recoTracks(hitlist):
 
 ### -------------------------------------------
 
-
 itime = datetime.now()
-if args.verbose: print("Starting script [", itime, "]")
+if args.verbose >= 1: print("Starting script [", itime, "]")
 
 ### Open file ###
 
-if args.verbose: print("Importing dataset...")
+if args.verbose >= 1: print("Importing dataset...")
 
 df = pd.DataFrame()
 
@@ -224,7 +235,7 @@ for filename in args.filenames:
         inputFile = open(filename, 'rb')
         dt = unpk.unpack(inputFile, args.max)
 
-        if args.verbose: print("Read %d lines from binary file %s" % (len(dt), filename))
+        if args.verbose >= 1: print("Read %d lines from binary file %s" % (len(dt), filename))
         df = df.append(pd.DataFrame.from_dict(dt), ignore_index=True)
         
     elif filename.endswith('.txt') or filename.endswith('.csv'):
@@ -237,13 +248,13 @@ for filename in args.filenames:
             skiprows=1, \
             nrows=args.max*1024 + 1 if args.max > 0 else 1e9, \
         )
-        if args.verbose: print("Read %d lines from txt file %s" % (len(dt), filename))
+        if args.verbose >= 1: print("Read %d lines from txt file %s" % (len(dt), filename))
         df = df.append(dt, ignore_index=True)
 
     else:
         print("File format not recognized, skipping file...")
 
-if args.verbose: print(df.head(50))
+if args.verbose >= 2: print(df.head(50))
 
 # remove tdc_channel = 139 since they are not physical events
 df = df[df['TDC_CHANNEL']<136]
@@ -269,7 +280,7 @@ if len(df) == 0:
     print("Empty dataframe, exiting...")
     exit()
 
-if args.verbose: print("Mapping channels...")
+if args.verbose >= 1: print("Mapping channels...")
 
 # Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
 mapconverter = Mapping()
@@ -283,11 +294,36 @@ df.loc[df['SL'] == 0, 'SL'] = -1
 df.loc[df['SL'] == 1, 'SL'] = 0
 df.loc[df['SL'] == -1, 'SL'] = 1
 
-if args.verbose: print("Determining BX0...")
+# Determine length of the run
+runtime = (df['ORBIT_CNT'].max() - df['ORBIT_CNT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
+if args.verbose >= 1: print("Duration of the run:\t%d" % runtime)
 
+# Save occupancy numbers before any further selection
+occupancy = df.groupby(['SL', 'LAYER', 'WIRE_NUM'])['HEAD'].count() # count performed a random column
+occupancy = occupancy.reset_index().rename(columns={'HEAD' : 'COUNTS'}) # reset the indices and make new ones, because the old indices are needed for selection
+occupancy['RATE'] = occupancy['COUNTS'] / runtime
+
+# Output to csv files
+occupancy.to_csv(args.outputdir + runname + "_csv/occupancy.csv", header=True, index=False)
+
+if args.verbose >= 2:
+    print(occupancy.head(10))
+
+
+if args.verbose >= 1: print("Determining BX0...")
+
+# Initialize counters
+nEvSl, iEvSl = len(df.groupby(['ORBIT_CNT', 'SL'])), 0
+
+# In any case (even if the meantimer is run), calculate the trigger BX0
+df['BX_MEANT'] = np.nan
+# Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
+df['BX_ASSIGN'] = df[df['HEAD']==3].groupby('ORBIT_CNT')['TDC_MEAS'].transform(np.min)
+df['BX_ASSIGN'] = df.groupby('ORBIT_CNT')['BX_ASSIGN'].transform(np.max)
+df['BX0'] = df['BX_ASSIGN'] # BX0 is the one that will be effectively used to determine TDRIFT
 
 # Determine BX0 either using meantimer or the trigger BX assignment
-if args.meantimer: # still to be developed
+if args.meantimer:
     mitime = datetime.now()
 
     # Use only hits
@@ -295,10 +331,10 @@ if args.meantimer: # still to be developed
     
     # Add necessary columns
     #df['TDC_CHANNEL_NORM'] = (df['TDC_CHANNEL'] - 64 * (df['SL']%2)).astype(np.uint8)
-    df['TIME_ABS'] = (df['ORBIT_CNT'].astype(np.float64)*DURATION['orbit'] + df['BX_COUNTER'].astype(np.float64)*DURATION['bx'] + df['TDC_MEAS'].astype(np.float64)*DURATION['tdc']).astype(np.float64)
+    df['TIME_ABS'] = ((df['ORBIT_CNT'] - df['ORBIT_CNT'].min()).astype(np.float64)*DURATION['orbit'] + df['BX_COUNTER'].astype(np.float64)*DURATION['bx'] + df['TDC_MEAS'].astype(np.float64)*DURATION['tdc']).astype(np.float64)
 
     
-    if args.verbose: print("+ Running meantimer...")
+    if args.verbose >= 1: print("Running meantimer...")
     # Group by orbit counter (event) and SL    
     df = df.groupby(['ORBIT_CNT', 'SL'], as_index=False).apply(meantimer)
     
@@ -312,30 +348,29 @@ if args.meantimer: # still to be developed
             sys.stdout.flush()
         adf = adf.drop_duplicates() 
         tzeros = meantimer_results(adf)[0]
-        if len(tzeros) > 0: df.loc[(df['ORBIT_CNT'] == iorbit) & (df['SL'] == isl), 'T0'] = np.mean(tzeros)
+        if len(tzeros) > 0: df.loc[(df['ORBIT_CNT'] == iorbit) & (df['SL'] == isl), 'BX0'] = np.mean(tzeros)
     '''
 
     mftime = datetime.now()
-    if args.verbose: print("\nMeantimer completed [", mftime - mitime, "]")
+    if args.verbose >= 1: print("\nMeantimer completed [", mftime - mitime, "]")
     
     # Calculate drift time
-    hits = df[df['T0'].notna()].copy()
-    hits['TDRIFT'] = (hits['TIME_ABS'] - hits['T0']).astype(np.float32)
+    df = df[df['T0'].notna()].copy()
+    #df['TDRIFT'] = (df['TIME_ABS'] - df['T0']).astype(np.float32)
 
-else:
-    # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
-    df['T0'] = df[df['HEAD']==3].groupby('ORBIT_CNT')['TDC_MEAS'].transform(np.min)
-    df['T0'] = df.groupby('ORBIT_CNT')['T0'].transform(np.max)
+    # Overwrite BX assignment
+    #df['BX_MEANT'] = (df['TIME_ABS'] - (df['TIME_ABS'] // DURATION['orbit']).astype(np.int32)*DURATION['orbit']) / DURATION['bx']
+    df['BX_MEANT'] = (df['T0'] - (df['ORBIT_CNT'] - df['ORBIT_CNT'].min())*DURATION['orbit']) / DURATION['bx']
+    df['BX0'] = df['BX_MEANT'] # If the meantimer is run, it supersedes the trigger BX0 assignemnt
 
-    # Select only valid hits
-    sparhits = df.loc[df['T0'].isnull()].copy()
-    trighits = df.loc[df['T0'] >= 0].copy()
-    hits = trighits.loc[df['HEAD']==1].copy()
+if args.verbose >= 1: print("Assigning positions...")
 
-    # Create column TDRIFT
-    hits['TDRIFT'] = (hits['BX_COUNTER']-hits['T0'])*DURATION['bx'] + hits['TDC_MEAS']*DURATION['tdc']
+# Select only valid hits
+losthits = df.loc[df['BX0'].isnull()].copy()
+hits = df.loc[(df['BX0'] >= 0) & (df['HEAD']==1)].copy()
 
-if args.verbose: print("Assigning positions...")
+# Create column TDRIFT
+hits['TDRIFT'] = (hits['BX_COUNTER']-hits['BX0'])*DURATION['bx'] + hits['TDC_MEAS']*DURATION['tdc']
 
 # Find events
 hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
@@ -349,22 +384,22 @@ mapconverter.addXleftright(hits)
 # Cosmetic changes to be compliant with common format
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
-if args.verbose: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
+if args.verbose >= 2: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 
 utime = datetime.now()
-if args.verbose: print("Unpacking completed [", utime, "],", "time elapsed [", utime - itime, "]")
+if args.verbose >= 1: print("Unpacking completed [", utime, "],", "time elapsed [", utime - itime, "]")
 
 
 # Reconstruction
-events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0']]
+events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'BX0', 'BX_ASSIGN', 'BX_MEANT']]
 
 events[['X', 'X_FIT']] = [np.nan, np.nan]
 events['X_LABEL'] = 0
 events['Y'] = 0.
 events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
 
-segments = pd.DataFrame()
-missinghits = pd.DataFrame()
+segments = pd.DataFrame(columns=['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'P0', 'P1', 'CHI2', 'HIT_INDEX'])
+missinghits = pd.DataFrame(columns=['ORBIT', 'BX', 'CHAMBER', 'LAYER', 'WIRE', 'X', 'Y', 'Z'])
 
 # Reconstruction
 from modules.geometry.sl import SL
@@ -384,6 +419,8 @@ GLOBAL_VIEW_SLs = {
     'yz': [SLs[1], SLs[3]]
 }
 
+# Reset counters
+nEvSl, iEvSl = len(events.groupby(['ORBIT', 'CHAMBER'])), 0
 events = events.groupby(['ORBIT', 'CHAMBER'], as_index=False).apply(recoSegments)
 
 
@@ -460,7 +497,7 @@ for ievsl, hitlist in evs:
 events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
 events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
 
-if args.verbose: print("Adding global positions [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
+if args.verbose >= 1: print("Adding global positions [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
 
 # Updating global positions
 for iSL, sl in SLs.items():
@@ -468,18 +505,20 @@ for iSL, sl in SLs.items():
     events.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X', 'Y', 'Z']].values)
     events.loc[slmask, ['X_LEFT_GLOB', 'Y_LEFT_GLOB', 'Z_LEFT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_LEFT', 'Y', 'Z']].values)
     events.loc[slmask, ['X_RIGHT_GLOB', 'Y_RIGHT_GLOB', 'Z_RIGHT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_RIGHT', 'Y', 'Z']].values)
+    #if len(missinghits) > 0:
     slmask = missinghits['CHAMBER'] == iSL
     missinghits.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = sl.coor_to_global(missinghits.loc[slmask, ['X', 'Y', 'Z']].values)
 
 
-if args.verbose: print("Reconstructing tracks [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
+if args.verbose >= 1: print("Reconstructing tracks [", datetime.now(), "],", "time elapsed [", datetime.now() - itime, "]")
 
+iEvSl = 0 # Reset counter
 events = events.groupby('ORBIT', as_index=False).apply(recoTracks)
 
 rtime = datetime.now()
-if args.verbose: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
+if args.verbose >= 1: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
 
-if args.verbose:
+if args.verbose >= 2:
     print(events.head(50))
     print(segments.head(10))
     print(segments.tail(10))
@@ -491,7 +530,7 @@ events.to_csv(args.outputdir + runname + "_csv/events.csv", header=True, index=F
 segments.to_csv(args.outputdir + runname + "_csv/segments.csv", header=True, index=False)
 missinghits.to_csv(args.outputdir + runname + "_csv/missinghits.csv", header=True, index=False)
 
-if args.verbose: print("Output files saved in directory", args.outputdir + runname + "_csv/")
+if args.verbose >= 1: print("Output files saved in directory", args.outputdir + runname + "_csv/")
 
 
 # Event display
@@ -505,7 +544,7 @@ ndisplays = 0
 for orbit, hitlist in evs:
     ndisplays += 1
     if ndisplays > args.display: break
-    if args.verbose: print("Drawing event", orbit, "...")
+    if args.verbose >= 1: print("Drawing event", orbit, "...")
     # Creating figures of the chambers
     figs = {}
     figs['sl'] = plot.book_chambers_figure(G)
@@ -553,10 +592,10 @@ for orbit, hitlist in evs:
     plots.append([figs['global'][v] for v in ['xz', 'yz']])
     bokeh.io.output_file(args.outputdir + runname + "_display/orbit_%d.html" % orbit, mode='cdn')
     bokeh.io.save(bokeh.layouts.layout(plots))
-    if args.verbose: print("Event dispaly number", orbit, "saved in", args.outputdir + runname + "_display/")
+    if args.verbose >= 2: print("Event dispaly number", orbit, "saved in", args.outputdir + runname + "_display/")
 
 
-if args.verbose: print("Done.")
+if args.verbose >= 1: print("Done.")
 
 
-# python analysis.py -i data/Run000966/output_raw.dat -m 1 -v
+# python3 analysis.py -i data/Run000966/output_raw.dat -m 1 -v
