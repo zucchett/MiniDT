@@ -16,6 +16,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
 parser.add_argument("-d", "--display", action="store", type=int, default=0, dest="display", help="Number of event to display")
 parser.add_argument("-e", "--event", action="store", type=int, default=0, dest="event", help="Inspect a single event")
+parser.add_argument("-f", "--flush", action="store_true", default=False, dest="flush", help="Discard first 128 words")
 parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
@@ -233,8 +234,8 @@ for filename in args.filenames:
         from modules.unpacker import *
         unpk = Unpacker()
         inputFile = open(filename, 'rb')
-        dt = unpk.unpack(inputFile, args.max)
-
+        dt = unpk.unpack(inputFile, args.max, args.flush)
+        if args.verbose >= 1 and args.flush: print("Skipping DMA flush at the beginning of the run")
         if args.verbose >= 1: print("Read %d lines from binary file %s" % (len(dt), filename))
         df = df.append(pd.DataFrame.from_dict(dt), ignore_index=True)
         

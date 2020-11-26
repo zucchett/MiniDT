@@ -10,18 +10,18 @@ class Unpacker:
     
         self.word_size = 8 # one 64-bit word
         self.num_words = 128 + 1 # 1 DMA data transfer = 1 kB = 1024 B = 128 words (hits)
+        self.num_words_transfer = 1024
 
-
-    def unpack(self, inputfile, maxwords=-1):
+    def unpack(self, inputfile, maxwords=-1, skipFlush=False):
         dt = []
         word_count = 0
         while (maxwords < 0 or word_count < maxwords):
             word = inputfile.read(self.num_words*self.word_size)
             
             if word and len(word) == self.num_words*self.word_size:
-                  d = self.unpacker(word)
-                  dt += d
-                  word_count += 1
+                d = self.unpacker(word)
+                if not (skipFlush and word_count < self.num_words_transfer): dt += d
+                word_count += 1
 
             else: break
         return dt
