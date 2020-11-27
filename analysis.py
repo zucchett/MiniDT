@@ -135,7 +135,7 @@ def recoSegments(hitlist):
     iorbit, isl = hitlist.name
     nhits = len(hitlist)
     if nhits < 3 or nhits > 20:
-        if args.verbose >= 2: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
+        if args.verbose >= 2: print("Skipping       event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
         return
     # Explicitly introduce left/right ambiguity
     lhits, rhits = hitlist.copy(), hitlist.copy()
@@ -163,28 +163,30 @@ def recoSegments(hitlist):
         posx, posz = lrcomb['X'], lrcomb['Z']
         seg_layer, seg_wire, seg_bx, seg_label, seg_idx = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values, lrcomb['HIT_INDEX'].values
         
-        # Fit
-        pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
+        # Fit: swap x and z, as the dominating uncertainty is on x
+        pfit, residuals, rank, singular_values, rcond = np.polyfit(posz, posx, 1, full=True)
         if len(residuals) > 0:
-            p1, p0 = pfit
+            p0, p1 = pfit
+            if p0 == 0.: continue
+            m, q = 1./p0, -p1/p0
             chi2 = residuals[0] / len(seg_idx)
-            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "nhits" : len(seg_idx), "pars" : [p0, p1], "idx" : seg_idx})
+            if chi2 < 10. and abs(m) > 1./math.sqrt(3.): #config.FIT_CHI2_MAX:
+                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "nhits" : len(seg_idx), "pars" : [m, q], "idx" : seg_idx})
         
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
-        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [fitResults[0]["nhits"]], 'P0' : [fitResults[0]["pars"][0]], 'P1' : [fitResults[0]["pars"][1]], 'CHI2' : [fitResults[0]["chi2"]], 'HIT_INDEX' : [seg_idx]}), ignore_index=True)
+        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [fitResults[0]["nhits"]], 'M' : [fitResults[0]["pars"][0]], 'Q' : [fitResults[0]["pars"][1]], 'CHI2' : [fitResults[0]["chi2"]], 'HIT_INDEX' : [seg_idx]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
-            x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
-            hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
+            x_seg = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][1]) / fitResults[0]["pars"][0]
+            hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_SEG']] = ilabel, x_seg
 
         # Missing hit interpolation
         if(fitResults[0]["nhits"] == 3):
             layers = list(hitlist['LAYER'])
             m_layer = [x for x in np.arange(1, 4+1) if not x in layers][0]
             m_zhit = mapconverter.getZlayer(m_layer)
-            m_xhit = (m_zhit - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
+            m_xhit = (m_zhit - fitResults[0]["pars"][1]) / fitResults[0]["pars"][0]
             m_wire_num = mapconverter.getWireNumber(m_xhit, m_layer)
             missinghits = missinghits.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'BX' : [np.nan], 'CHAMBER' : [isl], 'LAYER' : [m_layer], 'WIRE' : [m_wire_num], 'X' : [m_xhit], 'Y' : [0.], 'Z' : [m_zhit]}), ignore_index=True)
 
@@ -207,14 +209,20 @@ def recoTracks(hitlist):
         nhits = len(viewhits)
         if nhits < 3: continue
         posxy, posz = viewhits[view[0].upper() + '_GLOB'], viewhits[view[1].upper() + '_GLOB']
-        # Fit
-        pfit, residuals, rank, singular_values, rcond = np.polyfit(posxy, posz, 1, full=True)
+        # Fit: swap x/y and z, as the dominating uncertainty is on x/y
+        pfit, residuals, rank, singular_values, rcond = np.polyfit(posz, posxy, 1, full=True)
         if len(residuals) > 0:
-            p1, p0 = pfit
+            p0, p1 = pfit
+            if p0 == 0.: continue
+            m, q = 1./p0, -p1/p0
             chi2 = residuals[0] / nhits
-            if chi2 < 25. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-                segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [tuple(sl_ids)], 'NHITS' : [nhits], 'P0' : [p0], "P1" : [p1], "CHI2" : [chi2], "HIT_INDEX": [list(viewhits.index)]}), ignore_index=True)
-    
+            if chi2 < 25. and abs(m) > 1./math.sqrt(3.): #config.FIT_CHI2_MAX:
+                segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [tuple(sl_ids)], 'NHITS' : [nhits], 'M' : [m], "Q" : [q], "CHI2" : [chi2], "HIT_INDEX": [list(viewhits.index)]}), ignore_index=True)
+                for isl in sl_ids:
+                    for ilayer in range(1, 4+1):
+                        mask = (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer)
+                        hitlist.loc[mask, 'X_TRACK_GLOB'] = (hitlist.loc[mask, 'Z'].values - q) / m
+
     return hitlist
 
 ### -------------------------------------------
@@ -255,6 +263,11 @@ for filename in args.filenames:
     else:
         print("File format not recognized, skipping file...")
 
+
+if len(df) == 0:
+    print("Empty dataframe, exiting...")
+    exit()
+
 if args.verbose >= 2: print(df.head(50))
 
 # remove tdc_channel = 139 since they are not physical events
@@ -271,15 +284,10 @@ if args.event > 0: df = df[df['ORBIT_CNT'] == args.event]
 #df = df[df['ORBIT_CNT'] == 544654370]
 #df = df[df['ORBIT_CNT'] == 544768455]
 
-
 # remove double hits
 ##df['TDC_MEAS'] = df.groupby(['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'])['TDC_MEAS'].transform(np.max)
 ##df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='last')
 #df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='first')
-
-if len(df) == 0:
-    print("Empty dataframe, exiting...")
-    exit()
 
 if args.verbose >= 1: print("Mapping channels...")
 
@@ -297,7 +305,7 @@ df.loc[df['SL'] == -1, 'SL'] = 1
 
 # Determine length of the run
 runtime = (df['ORBIT_CNT'].max() - df['ORBIT_CNT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
-if args.verbose >= 1: print("Duration of the run:\t%d" % runtime)
+if args.verbose >= 1: print("Duration of the run:\t%d s" % runtime)
 
 # Save occupancy numbers before any further selection
 occupancy = df.groupby(['SL', 'LAYER', 'WIRE_NUM'])['HEAD'].count() # count performed a random column
@@ -383,7 +391,7 @@ hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
 mapconverter.addXleftright(hits)
 
 # Cosmetic changes to be compliant with common format
-hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'TDRIFT' : 'TIMENS'}, inplace=True)
+hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'WIRE_POS' : 'X_WIRE', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
 if args.verbose >= 2: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 
@@ -392,14 +400,15 @@ if args.verbose >= 1: print("Unpacking completed [", utime, "],", "time elapsed 
 
 
 # Reconstruction
-events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'BX0', 'BX_ASSIGN', 'BX_MEANT']]
+events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'BX0', 'BX_ASSIGN', 'BX_MEANT']]
 
-events[['X', 'X_FIT']] = [np.nan, np.nan]
 events['X_LABEL'] = 0
 events['Y'] = 0.
+events[['X', 'X_SEG', 'X_TRACK_GLOB']] = [np.nan, np.nan, np.nan]
+events[['X_TRACK', 'Y_TRACK', 'Z_TRACK']] = [np.nan, np.nan, np.nan]
 events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
 
-segments = pd.DataFrame(columns=['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'P0', 'P1', 'CHI2', 'HIT_INDEX'])
+segments = pd.DataFrame(columns=['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'Q', 'M', 'CHI2', 'HIT_INDEX'])
 missinghits = pd.DataFrame(columns=['ORBIT', 'BX', 'CHAMBER', 'LAYER', 'WIRE', 'X', 'Y', 'Z'])
 
 # Reconstruction
@@ -516,6 +525,14 @@ if args.verbose >= 1: print("Reconstructing tracks [", datetime.now(), "],", "ti
 iEvSl = 0 # Reset counter
 events = events.groupby('ORBIT', as_index=False).apply(recoTracks)
 
+# Updating global positions for track reconstructed positions
+for iSL, sl in SLs.items():
+    slmask = events['CHAMBER'] == iSL
+    events.loc[slmask, ['X_TRACK', 'Y_TRACK', 'Z_TRACK']] = sl.coor_to_local(events.loc[slmask, ['X_TRACK_GLOB', 'Y_GLOB', 'Z_GLOB']].values)
+# Drop unused columns
+events.drop(columns=['X_TRACK_GLOB', 'Y_TRACK', 'Z_TRACK'], inplace=True)
+
+
 rtime = datetime.now()
 if args.verbose >= 1: print("Reconstruction completed [", rtime, "],", "time elapsed [", rtime - itime, "]")
 
@@ -524,6 +541,7 @@ if args.verbose >= 2:
     print(segments.head(10))
     print(segments.tail(10))
     print(missinghits.tail(10))
+    print(events[['X_WIRE', 'X', 'X_GLOB', 'Y_GLOB', 'Z_GLOB', 'X_SEG', 'X_TRACK']].head(50))
 
 
 # Output to csv files
@@ -566,8 +584,7 @@ for orbit, hitlist in evs:
         for index, seg in segsl.iterrows():
             #col = config.TRACK_COLORS[iR]
             segz = [G.SL_FRAME['b'], G.SL_FRAME['t']]
-            segx = [((z - seg['P0']) / seg['P1']) for z in segz]
-            #print(segz, segx, seg['P1'], seg['P0'])
+            segx = [((z - seg['Q']) / seg['M']) for z in segz]
             figs['sl'][iSL].line(x=np.array(segx), y=np.array(segz), line_color='black', line_alpha=0.7, line_width=3)
 
     # Global points
@@ -585,7 +602,7 @@ for orbit, hitlist in evs:
         tracks = segments[(segments['VIEW'] == view.upper()) & (segments['ORBIT'] == orbit)]
         for index, trk in tracks.iterrows():
             trkz = [plot.PLOT_RANGE['y'][0] + 1, plot.PLOT_RANGE['y'][1] - 1]
-            trkxy = [((z - trk['P0']) / trk['P1']) for z in trkz]
+            trkxy = [((z - trk['Q']) / trk['M']) for z in trkz]
             figs['global'][view].line(x=np.array(trkxy), y=np.array(trkz), line_color='black', line_alpha=0.7, line_width=3)
 
 
