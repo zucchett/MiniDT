@@ -39,6 +39,7 @@ chanshift_x = [  0,            -1,           0,            -1,        ]
 posshift_z  = [  ZCELL*1.5,    -ZCELL*0.5,   ZCELL*0.5,    -ZCELL*1.5 ]
 posshift_x  = [  -7.5*XCELL,   -7.5*XCELL,   -7.0*XCELL,   -7.0*XCELL ]
 
+TIME_OFFSET_SL = [-20, +8, -12, -8]
 
 # keys: FPGA, TDC_CHANNEL
 
