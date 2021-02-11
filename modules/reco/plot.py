@@ -6,7 +6,7 @@ from modules.geometry import DTYPE_COOR
 
 import numpy as np
 
-PLOT_RANGE = {'x': (0, 800), 'y': (0, 1000)}
+PLOT_RANGE = {'x': (-400, 400), 'y': (0, 2000)}
 
 def book_chambers_figure(geo):
     """Book figures for plotting the hits inside chambers"""
@@ -16,7 +16,7 @@ def book_chambers_figure(geo):
         wire_positions = geo.wire_positions()
         # Creating the figure
         fig = figure(
-            plot_width=2520, plot_height=195,
+            plot_width=1500, plot_height=150,
             x_range=[geo.SL_FRAME['l'], geo.SL_FRAME['r']],
             y_range=[geo.SL_FRAME['b'], geo.SL_FRAME['t']],
             title="Local SL {0:d}".format(sl),
@@ -38,12 +38,12 @@ def book_chambers_figure(geo):
 def book_global_figure(geo, sls):
     """Book figures for plotting global hit positions in two orthogonal planes"""
     figs = {}
-    figs['xz'] = figure(plot_width=1250, plot_height=1300,
+    figs['xz'] = figure(plot_width=750, plot_height=780,
                         x_range=PLOT_RANGE['x'], y_range=PLOT_RANGE['y'],
                         title="Global XZ",
                         x_axis_label='x (mm)',
                         y_axis_label='z (mm)')
-    figs['yz'] = figure(plot_width=1250, plot_height=1300,
+    figs['yz'] = figure(plot_width=750, plot_height=780,
                         x_range=PLOT_RANGE['x'], y_range=PLOT_RANGE['y'],
                         title="Global YZ",
                         x_axis_label='y (mm)',

@@ -24,6 +24,23 @@ SL_ROTATION = {
     3: (0,        0,     0.5*pi)
 }
 
+# Time offset for each SL
+TIME_OFFSET_SL = {
+    0 : 0.,
+    1 : 0.,
+    2 : 0.,
+    3 : 0.,
+}
+
+# Time offset for each LAYER (all SL)
+TIME_OFFSET_LAYER = {
+    1 : -20.,
+    2 : +8.,
+    3 : -12.,
+    4 : -8.,
+}
+#TIME_OFFSET_SL = [-20, +8, -12, -8] # Run 000966
+
 # View of each SL (XZ, YZ)
 SL_VIEW = {
     'xz': [0, 2],

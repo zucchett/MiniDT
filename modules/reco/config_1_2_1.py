@@ -25,6 +25,22 @@ SL_VIEW = {
     'yz': [0, 2, 3],
 }
 
+# Time offset for each SL
+TIME_OFFSET_SL = {
+    0 : 80.+3.,
+    1 : 80.+0.,
+    2 : 80.+0.,
+    3 : 80.-3.,
+}
+
+# Time offset for each LAYER (all SL)
+TIME_OFFSET_LAYER = {
+    1 : 0.,
+    2 : 0.,
+    3 : 0.,
+    4 : 0.,
+}
+
 # Selection of hits to use for the fits
 TIMEBOX = (-5, 380)
 
