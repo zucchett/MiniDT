@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from modules.mapping.config import TDRIFT, VDRIFT, XCELL, ZCELL, DURATION, TIME_WINDOW, TIME_OFFSET_SL
+from modules.mapping.config import TDRIFT, VDRIFT, XCELL, ZCELL, DURATION, TIME_WINDOW
 from modules.mapping import *
 from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, MEANTIMER_ANGLES, meantimereq, mean_tzero, tzero_clusters
 from modules.reco.functions import *
@@ -21,7 +21,7 @@ parser.add_argument("-f", "--flush", action="store_true", default=False, dest="f
 parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
-parser.add_argument("-x", "--meantimer", action="store_true", default=False, dest="meantimer", help="Force application of the meantimer algorithm (override BX assignment)")
+parser.add_argument("-t", "--tzero", action="store", type=str, default=False, dest="tzero", help="Specify the algorithm to be used to determine the T0. M : meantimer, T : HT trigger, S : scintillators")
 parser.add_argument("-v", "--verbose", action="store", type=int, default=0, dest="verbose", help="Specify verbosity level")
 args = parser.parse_args()
 
@@ -139,7 +139,7 @@ def recoSegments(hitlist):
     nhits = len(hitlist)
     if nhits < config.NHITS_LOCAL_MIN or nhits > config.NHITS_LOCAL_MAX:
         if args.verbose >= 2: print("Skipping       event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
-        return
+        return hitlist
     # Explicitly introduce left/right ambiguity
     lhits, rhits = hitlist.copy(), hitlist.copy()
     lhits['HIT_INDEX'] = hitlist.index
@@ -184,7 +184,7 @@ def recoSegments(hitlist):
             m_xhit = (m_zhit - fitResults[0]["pars"][1]) / fitResults[0]["pars"][0]
             m_wire_num = mapconverter.getWireNumber(m_xhit, m_layer)
             missinghits = missinghits.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'BX' : [np.nan], 'CHAMBER' : [isl], 'LAYER' : [m_layer], 'WIRE' : [m_wire_num], 'X' : [m_xhit], 'Y' : [0.], 'Z' : [m_zhit]}), ignore_index=True)
-
+    
     return hitlist
 
 ### -------------------------------------------
@@ -313,17 +313,23 @@ nEvSl, iEvSl = len(df.groupby(['ORBIT_CNT', 'SL'])), 0
 
 # In any case (even if the meantimer is run), calculate the trigger BX0
 df['BX_MEANT'] = np.nan
-df['BX_TRIGGER'] = df[df['HEAD']==3].groupby('ORBIT_CNT')['TDC_MEAS'].transform(np.min) # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
+df['BX_TRIGGER'] = np.nan
+if args.tzero == 'T':
+    df['BX_TRIGGER'] = df[df['HEAD']==3].groupby('ORBIT_CNT')['TDC_MEAS'].transform(np.min) # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
+elif args.tzero == 'S':
+    df['BX_TRIGGER'] = df[(df['FPGA']==1) & (df['TDC_CHANNEL']==129)].groupby('ORBIT_CNT')['BX_COUNTER'].transform(np.min) # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
 df['BX_TRIGGER'] = df.groupby('ORBIT_CNT')['BX_TRIGGER'].transform(np.max)
 df['BX0'] = df['BX_TRIGGER'] # BX0 is the one that will be effectively used to determine TDRIFT
 
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "BX assigned")
+nTriggers = len(df.loc[df['BX0'].notna(), 'ORBIT_CNT'].unique())
+
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "BX assigned, found", nTriggers, "triggers")
 
 # Use only hits from now on
-df = df[df['HEAD'] == 2]
+df = df[(df['HEAD'] == 2) & (df['TDC_CHANNEL'] < 129)]
 
 # Determine BX0 either using meantimer or the trigger BX assignment
-if args.meantimer:
+if args.tzero == 'M':
     mtime = datetime.now()
 
     # Add necessary columns
@@ -353,19 +359,25 @@ if args.meantimer:
     # Overwrite BX assignment
     #df['BX_MEANT'] = (df['TIME_ABS'] - (df['TIME_ABS'] // DURATION['orbit']).astype(np.int32)*DURATION['orbit']) / DURATION['bx']
     df['BX_MEANT'] = (df['T0'] - (df['ORBIT_CNT'] - df['ORBIT_CNT'].min())*DURATION['orbit']) / DURATION['bx']
-    df.loc[df['BX0'].isna(), 'BX0'] = df.loc[df['BX0'].isna(), 'BX_MEANT'] # Use meantimer only if not trigger BX0 assignemnt
+    df.loc[df['BX0'].isna(), 'BX0'] = df.loc[df['BX0'].isna(), 'BX_MEANT'].astype(np.float64) # Use meantimer only if not trigger BX0 assignemnt
     df.drop(columns=['T0', 'TIME_ABS'], inplace=True)
-
+    df.reset_index(inplace=True)
     if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Meantimer completed")
+
 
 # Select only hits with time information
 losthits = df.loc[df['BX0'].isnull()].copy()
 hits = df.loc[df['BX0'].notna()].copy()
 
+if len(hits) == 0:
+    print("No entry with non-NaN T0, exiting...")
+    exit()
+
 # Add time calibration (offset)
-hits['TOFFSET'] = 0
-for isl in range(4):
-    hits.loc[hits['SL'] == isl, 'TOFFSET'] = int(TIME_OFFSET_SL[isl]) # Correction in ns has to be int
+#hits['TOFFSET'] = 0
+#for isl in range(4):
+#    hits.loc[hits['SL'] == isl, 'TOFFSET'] = int(TIME_OFFSET_SL[isl]) # Correction in ns has to be int
+hits['TOFFSET'] = hits['SL'].map(config.TIME_OFFSET_SL) + hits['LAYER'].map(config.TIME_OFFSET_LAYER)
 
 # Create column TDRIFT
 hits['TDRIFT'] = (hits['BX_COUNTER']-hits['BX0'])*DURATION['bx'] + hits['TDC_MEAS']*DURATION['tdc'] + hits['TOFFSET']
@@ -419,80 +431,11 @@ for view in ['xz', 'yz']: GLOBAL_VIEW_SLs[view] = [SLs[x] for x in config.SL_VIE
 
 # Reset counters
 nEvSl, iEvSl = len(events.groupby(['ORBIT', 'CHAMBER'])), 0
+
 events = events.groupby(['ORBIT', 'CHAMBER'], as_index=False).apply(recoSegments)
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Reconstructing segments")
 
-'''
-evs = events.groupby(['ORBIT', 'CHAMBER'])
-ievs, nevs = 0., len(evs)
-
-# Loop on events (same orbit)
-for ievsl, hitlist in evs:
-    ievs += 1.
-    iorbit, isl = ievsl
-    nhits = len(hitlist)
-
-    # Global coordinates
-    
-    # Calculating the hit positions for each SL in the global reference frame
-    for iSL, sl in SLs.items():
-        slmask = hitlist['CHAMBER'] == iSL
-        # Updating global positions for left hits
-        pos_global = sl.coor_to_global(hitlist.loc[slmask, ['X', 'Y', 'Z']].values)
-        hitlist.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = pos_global
-    print(hitlist)
-
-
-    if nhits < 3 or nhits > 20:
-        if args.verbose: print("Skipping event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
-        continue
-    # Explicitly introduce left/right ambiguity
-    lhits, rhits = hitlist.copy(), hitlist.copy()
-    lhits['X_LABEL'] = 1
-    lhits['X'] = lhits['X_LEFT']
-    rhits['X_LABEL'] = 2
-    rhits['X'] = rhits['X_RIGHT']
-    lrhits = lhits.append(rhits, ignore_index=True) # Join the left and right hits
-    
-    # Compute all possible combinations in the most efficient way
-    layer_list = [list(lrhits[lrhits['LAYER'] == x + 1].index) for x in range(min(nhits, 4))]
-    all_combs = list(itertools.product(*layer_list))
-    if args.verbose: print("Reconstructing event", iorbit, ", chamber", isl, ", has", nhits, "hits ->", len(all_combs), "combinations [%.2f %%]" % (100.*ievs/nevs))
-    fitRange, fitResults = (hitlist['Z'].min() - 0.5*ZCELL, hitlist['Z'].max() + 0.5*ZCELL), []
-    
-    # Fitting each combination
-    for comb in all_combs:
-        lrcomb = lrhits.iloc[list(comb)]
-        # Try to reject improbable combinations: difference between adjacent wires should be 2 or smaller
-        if len(lrcomb) >= 3 and max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
-        posx, posz = lrcomb['X'], lrcomb['Z']
-        seg_layer, seg_wire, seg_bx, seg_label = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values
-        
-        # Fit
-        
-        #pfit, stats = Polynomial.fit(posx, posz, 1, full=True, window=fitRange, domain=fitRange)
-        #if len(stats[0]) > 0:
-        #    chi2 = stats[0][0] / max(nhits, 4)
-        #    p0, p1 = pfit
-        #    if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-        #        fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "pars" : [p0, p1]})
-        
-        pfit, residuals, rank, singular_values, rcond = np.polyfit(posx, posz, 1, full=True)
-        if len(residuals) > 0:
-            p1, p0 = pfit
-            chi2 = residuals[0] / max(nhits, 4)
-            if chi2 < 10. and abs(p1) > 1.0: #config.FIT_CHI2_MAX:
-                fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "pars" : [p0, p1]})
-        
-    fitResults.sort(key=lambda x: x["chi2"])
-
-    if len(fitResults) > 0:
-        segments = segments.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'CHAMBER' : [isl], 'NHITS' : [len(hitlist)], 'P0' : [fitResults[0]["pars"][0]], "P1" : [fitResults[0]["pars"][1]], "CHI2" : [fitResults[0]["chi2"]]}), ignore_index=True)
-        for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
-            x_fit = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][0]) / fitResults[0]["pars"][1]
-            events.loc[(events['ORBIT'] == iorbit) & (events['BX'] == ibx) & (events['CHAMBER'] == isl) & (events['LAYER'] == ilayer) & (events['WIRE'] == iwire), ['X_LABEL', 'X_FIT']] = ilabel, x_fit
-'''
 events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
 events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
 
