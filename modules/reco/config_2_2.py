@@ -24,6 +24,19 @@ SL_ROTATION = {
     3: (0,        0,     0.5*pi)
 }
 
+# View of each SL (XZ, YZ)
+SL_VIEW = {
+    'xz': [0, 2],
+    'yz': [1, 3],
+}
+SL_FITS = {
+    'xz': [0, 2],
+    'yz': [1, 3],
+}
+
+# Scintillator time offset
+TIME_OFFSET_SCINT = 95.0
+
 # Time offset for each SL
 TIME_OFFSET_SL = {
     0 : 0.,
@@ -40,12 +53,6 @@ TIME_OFFSET_LAYER = {
     4 : -8.,
 }
 #TIME_OFFSET_SL = [-20, +8, -12, -8] # Run 000966
-
-# View of each SL (XZ, YZ)
-SL_VIEW = {
-    'xz': [0, 2],
-    'yz': [1, 3],
-}
 
 # Fit quality cuts
 FIT_ANGLES = (-1.1, +1.1)

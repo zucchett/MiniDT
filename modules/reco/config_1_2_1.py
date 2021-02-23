@@ -24,13 +24,20 @@ SL_VIEW = {
     'xz': [1, ],
     'yz': [0, 2, 3],
 }
+SL_FITS = {
+    'xz': [1, ],
+    'yz': [0, 3],
+}
+
+# Scintillator time offset
+TIME_OFFSET_SCINT = 95.0
 
 # Time offset for each SL
 TIME_OFFSET_SL = {
-    0 : 80.+3.,
-    1 : 80.+0.,
-    2 : 80.+0.,
-    3 : 80.-3.,
+    0 : -0.66,
+    1 : -7.86,
+    2 : -7.68,
+    3 : -2.87,
 }
 
 # Time offset for each LAYER (all SL)
