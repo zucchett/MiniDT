@@ -21,7 +21,7 @@ def book_chambers_figure(geo):
             y_range=[geo.SL_FRAME['b'], geo.SL_FRAME['t']],
             title="Local SL {0:d}".format(sl),
             x_axis_label="x (mm)",
-            y_axis_label="y (mm)")
+            y_axis_label="z (mm)")
         # Drawing the cells layout
         for l in range(1, geo.NLAYERS+1):
             fig.quad(left=geo.CELL_BORDERS[l]['l'], right=geo.CELL_BORDERS[l]['r'], 

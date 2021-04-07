@@ -19,7 +19,7 @@ class Unpacker:
             word = inputfile.read(self.num_words*self.word_size)
             
             if word and len(word) == self.num_words*self.word_size:
-                d = self.unpacker(word)
+                d = self.unpacker_nnt(word)
                 if not (skipFlush and word_count < self.num_words_transfer): dt += d
                 word_count += 1
 
@@ -27,7 +27,7 @@ class Unpacker:
         return dt
 
 
-    def unpacker(self, hit):
+    def unpacker_fht(self, hit):
         
         rows = []
         
@@ -37,7 +37,7 @@ class Unpacker:
             head = (buffer >> 62) & 0x3
             
             if head == 1 or head == 2:
-                rows.append(self.hit_unpacker(buffer))
+                rows.append(self.hit_unpacker_v1(buffer))
 
             elif head == 3:
                 rows.append(self.trigger_unpacker(buffer))
@@ -45,7 +45,28 @@ class Unpacker:
         return rows
 
 
-    def hit_unpacker(self, word):
+    def unpacker_nnt(self, hit):
+        
+        rows = []
+        
+        for i in range(0, self.num_words*self.word_size, self.word_size):
+            
+            buffer = struct.unpack('<Q', hit[i:i+self.word_size])[0]
+            head = (buffer >> 61) & 0x7
+            
+            if head == 2:
+                rows.append(self.hit_unpacker_v2(buffer))
+
+            elif head == 0:
+                rows.append(self.eq_unpacker(buffer))
+
+            elif head == 4 or head == 5:
+                rows.append(self.param_unpacker_v2(buffer))
+            
+        return rows
+
+
+    def hit_unpacker_v1(self, word):
         # hit masks
         hmaskTDC_MEAS     = 0x1F
         hmaskBX_COUNTER   = 0xFFF
@@ -64,12 +85,12 @@ class Unpacker:
         TDC_MEAS     =      int(( word >> hfirstTDC_MEAS    ) & hmaskTDC_MEAS   )
         BX_COUNTER   =      int(( word >> hfirstBX_COUNTER  ) & hmaskBX_COUNTER )
         ORBIT_CNT    =      int(( word >> hfirstORBIT_CNT   ) & hmaskORBIT_CNT  )
-        TDC_CHANNEL  =  1 + int(( word >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL)
+        TDC_CHANNEL  =      int(( word >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL)
         FPGA         =      int(( word >> hfirstFPGA        ) & hmaskFPGA       )
         HEAD         =      int(( word >> hfirstHEAD        ) & hmaskHEAD       )
         
-        if((TDC_CHANNEL!=137) and (TDC_CHANNEL!=138)):
-            TDC_MEAS -= 1
+        #if((TDC_CHANNEL!=137) and (TDC_CHANNEL!=138)):
+        #    TDC_MEAS -= 1
 
         unpacked  = {
             'HEAD': HEAD,
@@ -79,6 +100,42 @@ class Unpacker:
             'BX_COUNTER': BX_COUNTER,
             'TDC_MEAS': TDC_MEAS,
             'TRG_QUALITY': np.NaN
+        }
+        
+        return unpacked #Row(**unpacked)
+
+
+    def hit_unpacker_v2(self, word):
+        # hit masks
+        hmaskTDC_MEAS     = 0x1F
+        hmaskBX_COUNTER   = 0xFFF
+        hmaskORBIT_CNT    = 0xFFFFFFFF
+        hmaskTDC_CHANNEL  = 0x1FF
+        hmaskFPGA         = 0x7
+        hmaskHEAD         = 0x7
+
+        hfirstTDC_MEAS    = 0
+        hfirstBX_COUNTER  = 5
+        hfirstORBIT_CNT   = 17
+        hfirstTDC_CHANNEL = 49
+        hfirstFPGA        = 58
+        hfirstHEAD        = 61
+        
+        TDC_MEAS     =      int(( word >> hfirstTDC_MEAS    ) & hmaskTDC_MEAS   )
+        BX_COUNTER   =      int(( word >> hfirstBX_COUNTER  ) & hmaskBX_COUNTER )
+        ORBIT_CNT    =      int(( word >> hfirstORBIT_CNT   ) & hmaskORBIT_CNT  )
+        TDC_CHANNEL  =      int(( word >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL)
+        FPGA         =      int(( word >> hfirstFPGA        ) & hmaskFPGA       )
+        HEAD         =      int(( word >> hfirstHEAD        ) & hmaskHEAD       )
+
+        unpacked  = {
+            'HEAD': HEAD,
+            'FPGA': FPGA,
+            'TDC_CHANNEL': TDC_CHANNEL,
+            'ORBIT_CNT': ORBIT_CNT,
+            'BX_COUNTER': BX_COUNTER,
+            'TDC_MEAS': TDC_MEAS,
+            'PARAM' : np.NaN,
         }
         
         return unpacked #Row(**unpacked)
@@ -122,3 +179,101 @@ class Unpacker:
         
         return unpacked #Row(**unpacked)
 
+
+    def eq_unpacker(self, word):
+        # EQ-hits masks
+        emaskEQ_LABEL     = 0x1F
+        emaskTDC_MEAS     = 0x1F
+        emaskBX_COUNTER   = 0xFFF
+        emaskORBIT_CNT    = 0xFFFFFFFF
+        emaskFPGA         = 0x7
+        emaskHEAD         = 0x7
+
+        efirstEQ_LABEL    = 0
+        efirstTDC_MEAS    = 7
+        efirstBX_COUNTER  = 12
+        efirstORBIT_CNT   = 24
+        efirstFPGA        = 58
+        efirstHEAD        = 61
+
+        TDC_MEAS     =      int(( word >> efirstTDC_MEAS    ) & emaskTDC_MEAS   )
+        BX_COUNTER   =      int(( word >> efirstBX_COUNTER  ) & emaskBX_COUNTER )
+        ORBIT_CNT    =      int(( word >> efirstORBIT_CNT   ) & emaskORBIT_CNT  )
+        TDC_CHANNEL  =      int(( word >> efirstTDC_MEAS    ) & emaskTDC_MEAS   )
+        FPGA         =      int(( word >> efirstFPGA        ) & emaskFPGA       )
+        HEAD         =      int(( word >> efirstHEAD        ) & emaskHEAD       )
+
+        unpacked  = {
+            'HEAD': HEAD,
+            'FPGA': FPGA,
+            'TDC_CHANNEL': TDC_CHANNEL,
+            'ORBIT_CNT': ORBIT_CNT,
+            'BX_COUNTER': BX_COUNTER,
+            'TDC_MEAS': TDC_MEAS,
+            'PARAM' : np.NaN,
+        }
+        
+        return unpacked #Row(**unpacked)
+
+
+
+    def param_unpacker_v1(self, word):
+        # hit masks
+        pmaskHEAD         = 0x7
+        pmaskFPGA         = 0x7
+        pmaskPARAM        = 0xFFFFFFFF
+
+        pfirstHEAD        = 61
+        pfirstFPGA        = 58
+        pfirstPARAM       = 0
+        
+        PARAMINT     =      int(( word >> pfirstPARAM    ) & pmaskPARAM   )
+        FPGA         =      int(( word >> pfirstFPGA     ) & pmaskFPGA    )
+        HEAD         =      int(( word >> pfirstHEAD     ) & pmaskHEAD    )
+
+        PARAM = struct.unpack('!f', struct.pack('!I', PARAMINT))[0] # Equivalent to the C code: float fvalue = *(float*)&value;
+        
+        unpacked  = {
+            'HEAD': HEAD,
+            'FPGA': FPGA,
+            'TDC_CHANNEL': 0,
+            'ORBIT_CNT': 0,
+            'BX_COUNTER': 0,
+            'TDC_MEAS': 0,
+            'PARAM': PARAM,
+        }
+        
+        return unpacked #Row(**unpacked)
+
+
+
+    def param_unpacker_v2(self, word):
+        # hit masks
+        pmaskHEAD         = 0x7
+        pmaskFPGA         = 0x7
+        pmaskORBIT_CNT    = 0xFFFFFFFF
+        pmaskVALUE        = 0xFFFF
+
+        pfirstHEAD        = 61
+        pfirstFPGA        = 58
+        pfirstORBIT_CNT   = 24
+        pfirstVALUE       = 0
+        
+        VALUEINT     =      int(( word >> pfirstVALUE    ) & pmaskVALUE     )
+        ORBIT_CNT    =      int(( word >> pfirstORBIT_CNT) & pmaskORBIT_CNT )
+        FPGA         =      int(( word >> pfirstFPGA     ) & pmaskFPGA      )
+        HEAD         =      int(( word >> pfirstHEAD     ) & pmaskHEAD      )
+        
+        VALUE = struct.unpack('!e', struct.pack('!H', VALUEINT))[0] # Equivalent to the C code: float fvalue = *(float*)&value;
+        
+        unpacked  = {
+            'HEAD': HEAD,
+            'FPGA': FPGA,
+            'TDC_CHANNEL': 0,
+            'ORBIT_CNT': ORBIT_CNT,
+            'BX_COUNTER': 0,
+            'TDC_MEAS': 0,
+            'PARAM': VALUE,
+        }
+        
+        return unpacked #Row(**unpacked)

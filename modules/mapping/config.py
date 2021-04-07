@@ -34,10 +34,35 @@ ZCHAMB    = 550.                     # spacing betweeen chambers in mm
 TDRIFT    = 15.6*DURATION['bx']    # drift time in ns
 VDRIFT    = XCELL*0.5 / TDRIFT     # drift velocity in mm/ns 
 
-layer_z     = [  1,            3,            2,            4,         ]
-chanshift_x = [  0,            -1,           0,            -1,        ]
-posshift_z  = [  ZCELL*1.5,    -ZCELL*0.5,   ZCELL*0.5,    -ZCELL*1.5 ]
-posshift_x  = [  -7.5*XCELL,   -7.5*XCELL,   -7.0*XCELL,   -7.0*XCELL ]
+#layer_z     = [  1,            3,            2,            4,         ]
+#chanshift_x = [  0,            -1,           0,            -1,        ]
+#posshift_z  = [  ZCELL*1.5,    -ZCELL*0.5,   ZCELL*0.5,    -ZCELL*1.5 ]
+#posshift_x  = [  -7.5*XCELL,   -7.5*XCELL,   -7.0*XCELL,   -7.0*XCELL ]
+
+layer_z     = [  4,            2,            3,            1,         ]
+posshift_z  = [  -ZCELL*1.5,   -ZCELL*0.5,   ZCELL*0.5,    +ZCELL*1.5 ]
+posshift_x  = [  -7.0*XCELL,   -7.5*XCELL,   -7.0*XCELL,   -7.5*XCELL ]
+
+tappino = {
+    0 : 0,
+    1 : 1,
+    2 : 1,
+    3 : 2,
+    4 : 2, 
+    5 : 2,
+    6 : 2,
+    7 : 3,
+    8 : 3,
+    9 : 3,
+    10 : 3,
+    11 : 4,
+    12 : 4,
+    13 : 4,
+    14 : 4,
+    15 : 5,
+    16 : 5,
+    17 : 0,
+}
 
 
 # keys: FPGA, TDC_CHANNEL

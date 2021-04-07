@@ -5,15 +5,15 @@ from math import pi, sqrt
 
 # Shifts of each SL along the (X,Y,Z) axis
 SL_SHIFT = {
-    0: (0.,   0.,   219.8),
-    1: (0.,   0.,   977.7),
-    2: (0.,   0.,   1036.0),
-    3: (0.,   0.,   1819.5),
+    0: (0.,   2.5,   219.8),
+    1: (0.,   0.,   977.3),
+    2: (0.,   0.,   1035.6),
+    3: (0.,   -2.,   1819.8),
 }
 
 # Rotation of each SL around the (X,Y,Z) axis
 SL_ROTATION = {
-    0: (0,        0,     0.5*pi),
+    0: (0,        0.013,     0.5*pi), #-0.0125
     1: (0,        0,          0),
     2: (0,        0,     0.5*pi),
     3: (0,        0,     0.5*pi)
@@ -25,19 +25,28 @@ SL_VIEW = {
     'yz': [0, 2, 3],
 }
 SL_FITS = {
-    'xz': [1, ],
-    'yz': [0, 3],
+    'xz': [[1], ],
+    'yz': [[0, 2, 3], [0], [2], [3]],
 }
 
 # Scintillator time offset
 TIME_OFFSET_SCINT = 95.0
 
 # Time offset for each SL
+# Run 1200
+#TIME_OFFSET_SL = {
+#    0 : 5.9,
+#    1 : 12.6,
+#    2 : 1.2,
+#    3 : 4.7,
+#}
+
+# Run 1209+
 TIME_OFFSET_SL = {
-    0 : -0.66,
-    1 : -7.86,
-    2 : -7.68,
-    3 : -2.87,
+    0 : -1.1,
+    1 : 6.4,
+    2 : 0.5,
+    3 : -2.6,
 }
 
 # Time offset for each LAYER (all SL)
@@ -55,6 +64,7 @@ TIMEBOX = (-5, 380)
 FIT_ANGLES = (-1.1, +1.1)
 FIT_M_MIN = 1./sqrt(3.)
 FIT_CHI2NDF_MAX = 10.0
+FIT_GLOBAL_CHI2NDF_MAX = 10.0
 
 # Fit parameters
 NHITS_LOCAL_MIN = 3
