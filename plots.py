@@ -140,11 +140,6 @@ def fitGaus(axs, ybins, xbins, patches):
 
 runname = [x for x in args.inputdir.split('/') if 'Run' in x][0].replace("_csv", "") if "Run" in args.inputdir else "Run000000"
 
-
-if not os.path.exists(args.inputdir + "/events.csv") or not os.path.exists(args.inputdir + "/segments.csv"):
-    print("One or more input files not found.")
-    exit()
-
 if args.verbose >= 1: print("Writing plots in directory %s_plots/" % (args.outputdir + runname))
 
 if args.plot in "boxes,parameters,residues,missinghits":
