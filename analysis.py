@@ -11,7 +11,7 @@ from modules.mapping import *
 from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, MEANTIMER_ANGLES, meantimereq, mean_tzero, tzero_clusters
 from modules.reco.functions import *
 from modules.reco import plot
-from modules.reco import config_1_2_1 as config
+from modules.reco import config_3_1 as config
 
 import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
@@ -19,7 +19,7 @@ parser.add_argument("-d", "--display", action="store", type=int, default=0, dest
 parser.add_argument("-e", "--event", action="store", type=int, default=0, dest="event", help="Inspect a single event")
 parser.add_argument("-f", "--flush", action="store_true", default=False, dest="flush", help="Discard first 128 words")
 parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
-parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="", help="Specify output directory, if empty no csv output is produced")
+parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="output/", help="Specify output directory, if empty no csv output is produced")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
 parser.add_argument("-p", "--parallel", action="store_true", default=False, dest="parallel", help="Enable CPU parallelization")
 parser.add_argument("-t", "--tzero", action="store", type=str, default=False, dest="tzero", help="Specify the algorithm to be used to determine the T0. M : meantimer, T : HT trigger, S : scintillators")
@@ -29,9 +29,10 @@ args = parser.parse_args()
 
 runname = [x for x in args.filenames[0].split('/') if 'Run' in x][0] if "Run" in args.filenames[0] else "Run000000"
 
-if len(args.outputdir) > 0 and not os.path.exists(args.outputdir): os.makedirs(args.outputdir)
-for d in ["plots", "display", "csv"]:
-    if not os.path.exists(args.outputdir + runname + "_" + d + "/"): os.makedirs(args.outputdir + runname + "_" + d + "/")
+if len(args.outputdir) > 0:
+    if not os.path.exists(args.outputdir): os.makedirs(args.outputdir)
+    for d in ["csv", "display", "plots", "trigger"]:
+        if not os.path.exists(args.outputdir + runname + "_" + d + "/"): os.makedirs(args.outputdir + runname + "_" + d + "/")
 
 # Copy data from LNL to CERN
 # scp /data/Run001089/*.dat zucchett@lxplus.cern.ch:/afs/cern.ch/work/z/zucchett/public/FortyMHz/Run001089/
@@ -41,41 +42,6 @@ for d in ["plots", "display", "csv"]:
 
 
 mapconverter = Mapping()
-'''
-sl = 1
-layer = 3
-fpga = mapconverter.getFPGA(sl)
-wire_num = mapconverter.getWireNumber(140, layer)
-c = mapconverter.getChannel(sl, layer, wire_num)
-print("fpga", fpga, "        c", c, "       layer", layer, "        wrie", wire_num)
-'''
-'''
-z = -6.5
-for x in [(x + 0.501) * 42 for x in range(-18, 18)]:
-
-    #print("x", x, "       z", z)
-
-    layer = mapconverter.getLayerZ(z)
-    sl = 0
-    wire_num = mapconverter.getWireNumber(x, layer)
-    fpga = mapconverter.getFPGA(sl)
-    c = mapconverter.getChannel(sl, layer, wire_num)
-
-    print("fpga", fpga, "        c", c, "       layer", layer, "        wrie", wire_num)
-
-    _sl = mapconverter.getSL(fpga, c)
-    _layer = mapconverter.getLayer(c)
-    _wire = mapconverter.getWireNum(c)
-    _shift = mapconverter.getXposshift(c)
-    _posx = mapconverter.getWirePosition(_wire, _layer)
-    _posz = mapconverter.getZpos(c)
-
-    #print("x", _posx, "      z", _posz)
-    print(x-_posx, z-_posz)
-
-
-exit()
-'''
 
 # Layer    # Parameters
 
@@ -334,7 +300,7 @@ if args.verbose >= 2: print("DF:\n", df.head(50))
 # Trigger tracks
 #df['ORBIT_CNT'] = fix_orbit(df.ORBIT_CNT.values)
 triggers = df[(df['HEAD'] == 4) | (df['HEAD'] == 5)].copy()
-triggers = triggers[triggers['FPGA'] == 1]
+triggers = triggers[triggers['FPGA'] == 0]
 # Remove consecutive words
 triggers['PARAM'] = triggers['PARAM'].loc[triggers['PARAM'].shift() != triggers['PARAM']]
 triggers['HEAD'] = triggers['HEAD'].loc[triggers['HEAD'].shift() != triggers['HEAD']]
@@ -350,7 +316,7 @@ triggers[['VIEW', 'CHAMBER', 'NHITS', 'SIGMAM', 'SIGMAQ', 'CHI2', 'HIT_INDEX', '
 triggers = triggers[['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0']]
 # Adopt common parameters notation
 triggers['M'] = 1. / triggers['M']
-triggers['Q'] = - triggers['M'] * (triggers['Q'] + XCELL * 3)
+triggers['Q'] = - triggers['M'] * (triggers['Q'] + XCELL * config.TRIGGER_CELL_OFFSET)
 if args.verbose >= 2: print("Triggers:\n", triggers.head(50))
 
 # remove double hits
@@ -365,9 +331,9 @@ df = mapconverter.virtex7(df)
 
 # FIXME: SL 0 and 1 are swapped
 pd.options.mode.chained_assignment = None
-#df.loc[df['SL'] == 0, 'SL'] = -1
-#df.loc[df['SL'] == 1, 'SL'] = 0
-#df.loc[df['SL'] == -1, 'SL'] = 1
+df.loc[df['SL'] == 0, 'SL'] = -1
+df.loc[df['SL'] == 1, 'SL'] = 0
+df.loc[df['SL'] == -1, 'SL'] = 1
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Channel mapping completed")
 if args.verbose >= 2: print("DF:\n", df.head(50))
@@ -471,7 +437,7 @@ events[['X_TRACK_GLOB', 'Y_TRACK_GLOB']] = [np.nan, np.nan]
 events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
 
 # Add number of tappino (c)
-mapconverter.addTappinoNum(events)
+#mapconverter.addTappinoNum(events)
 
 missinghits = pd.DataFrame(columns=['ORBIT', 'BX', 'CHAMBER', 'LAYER', 'WIRE', 'X', 'Y', 'Z'])
 segments = pd.DataFrame(columns=['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0'])
@@ -647,10 +613,11 @@ for orbit, hitlist in evs:
 
     plots = [[figs['sl'][l]] for l in [3, 2, 1, 0]]
     plots.append([figs['global'][v] for v in ['xz', 'yz']])
-    bokeh.io.output_file("output/" + runname + "_display/orbit_%d.html" % orbit, mode='cdn') #args.outputdir
-    bokeh.io.save(bokeh.layouts.layout(plots))
-    #bokeh.io.export_png(bokeh.layouts.layout(plots), filename="output/" + runname + "_display/orbit_%d.png" % orbit)
-    if args.verbose >= 2: print("Event dispaly number", orbit, "saved in", args.outputdir + runname + "_display/")
+    if len(args.outputdir) > 0:
+        bokeh.io.output_file(args.outputdir + "/" + runname + "_display/orbit_%d.html" % orbit, mode='cdn') #args.outputdir
+        bokeh.io.save(bokeh.layouts.layout(plots))
+        #bokeh.io.export_png(bokeh.layouts.layout(plots), filename="output/" + runname + "_display/orbit_%d.png" % orbit)
+        if args.verbose >= 2: print("Event dispaly number", orbit, "saved in", args.outputdir + runname + "_display/")
 
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Done.")

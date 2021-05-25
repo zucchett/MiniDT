@@ -132,5 +132,6 @@ class Mapping:
         return channel // 4 + 1
         
     def addTappinoNum(self, df):
-        df['TAPPINO'] = df['WIRE_NUM'].apply( config.tappino )
+        df['TAPPINO'] = df['WIRE'].map( config.tappino )
+        return df
         

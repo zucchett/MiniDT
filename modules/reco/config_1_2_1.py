@@ -26,20 +26,19 @@ SL_VIEW = {
 }
 SL_FITS = {
     'xz': [[1], ],
-    'yz': [[0, 2, 3], [0], [2], [3]],
+    'yz': [[0, 3], [0], [2], [3]],
 }
+
+# Definition of the vies (phi, theta)
+PHI_VIEW = 'yz'
+THETA_VIEW = 'xz'
+
+# Number of the triggering chamber to be tested
+SL_TEST = 2
+SL_AUX = max(SL_FITS[PHI_VIEW], key=len)
 
 # Scintillator time offset
 TIME_OFFSET_SCINT = 95.0
-
-# Time offset for each SL
-# Run 1200
-#TIME_OFFSET_SL = {
-#    0 : 5.9,
-#    1 : 12.6,
-#    2 : 1.2,
-#    3 : 4.7,
-#}
 
 # Run 1209+
 TIME_OFFSET_SL = {
@@ -65,7 +64,12 @@ FIT_ANGLES = (-1.1, +1.1)
 FIT_M_MIN = 1./sqrt(3.)
 FIT_CHI2NDF_MAX = 10.0
 FIT_GLOBAL_CHI2NDF_MAX = 10.0
+FIT_GLOBAL_MINHITS = 7
+FIT_LOCAL_MINHITS = 3
 
-# Fit parameters
+# Noise cuts
 NHITS_LOCAL_MIN = 3
 NHITS_LOCAL_MAX = 20
+
+# Trigger
+TRIGGER_CELL_OFFSET = 3

@@ -4,7 +4,7 @@
 
 The scripts run with python3; previous python versions also work but require minimal changes to the printouts, but form instance cannot use numba for performance improvements.
 
-The following packages are also required: `pandas` `matplotlib` `bokeh` `numba`
+The following packages are also required: `pandas` `numpy` `scipy` `matplotlib` `seaborn` `mplhep` `bokeh`. The packege `numba` is used for testing.
 
 They can be installed with `pip` using the command:
 

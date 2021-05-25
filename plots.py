@@ -145,135 +145,69 @@ if not os.path.exists(args.inputdir + "/events.csv") or not os.path.exists(args.
     print("One or more input files not found.")
     exit()
 
-if args.verbose >= 1: print("Writing plots in directory %s" % (args.outputdir + runname))
+if args.verbose >= 1: print("Writing plots in directory %s_plots/" % (args.outputdir + runname))
+
+if args.plot in "boxes,parameters,residues,missinghits":
+    #if len(args.outputdir + runname) > 0:
+    #    if not os.path.exists(args.outputdir + runname): os.makedirs(args.outputdir + runname)
+    #    for d in ["occupancy", "timebox", "parameters", "residuals", "missinghits", "alignment", "trigger"]:
+    #        if not os.path.exists(args.outputdir + runname + "/" + d + "/"): os.makedirs(args.outputdir + runname + "/" + d + "/")
 
 
-#if len(args.outputdir + runname) > 0:
-#    if not os.path.exists(args.outputdir + runname): os.makedirs(args.outputdir + runname)
-#    for d in ["occupancy", "timebox", "parameters", "residuals", "missinghits", "alignment", "trigger"]:
-#        if not os.path.exists(args.outputdir + runname + "/" + d + "/"): os.makedirs(args.outputdir + runname + "/" + d + "/")
+    #hits = pd.read_csv(args.inputdir + "/events.csv", skiprows=0, low_memory=False)
+    #segments = pd.read_csv(args.inputdir + "/segments.csv", dtype={'CHAMBER': object}, skiprows=0, low_memory=False)
+    #missinghits = pd.read_csv(args.inputdir + "/missinghits.csv", skiprows=0, low_memory=False)
+    #occupancy = pd.read_csv(args.inputdir + "/occupancy.csv", skiprows=0, low_memory=False)
+
+    hits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "events*.csv"))))
+    segments = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "segments*.csv"))))
+    missinghits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "missinghits*.csv"))))
 
 
-#hits = pd.read_csv(args.inputdir + "/events.csv", skiprows=0, low_memory=False)
-#segments = pd.read_csv(args.inputdir + "/segments.csv", dtype={'CHAMBER': object}, skiprows=0, low_memory=False)
-#missinghits = pd.read_csv(args.inputdir + "/missinghits.csv", skiprows=0, low_memory=False)
-#occupancy = pd.read_csv(args.inputdir + "/occupancy.csv", skiprows=0, low_memory=False)
+    if args.verbose >= 1: print("Read %d lines from events.csv" % (len(hits), ))
+    if args.verbose >= 2: print(hits.head(50))
+    if args.verbose >= 1: print("Read %d lines from segments.csv" % (len(segments), ))
+    if args.verbose >= 2:
+        print(segments.head(50))
+        print(segments.tail(50))
 
-hits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "events*.csv"))))
-segments = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "segments*.csv"))))
-missinghits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "missinghits*.csv"))))
-occupancy = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "occupancy*.csv"))))
+    # Recalculate rate in case of multiple files
+    runtime = (hits['ORBIT'].max() - hits['ORBIT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
+    occupancy['RATE'] = occupancy['COUNTS'] / runtime
 
+    hits = hits[hits['T0'].notnull()]
 
+    hits['X_DRIFT'] = hits['TIMENS'] * VDRIFT
 
-if args.verbose >= 1: print("Read %d lines from events.csv" % (len(hits), ))
-if args.verbose >= 2: print(hits.head(50))
-if args.verbose >= 1: print("Read %d lines from segments.csv" % (len(segments), ))
-if args.verbose >= 2:
-    print(segments.head(50))
-    print(segments.tail(50))
+    # Residuals
+    hits['RESIDUES_SEG'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_SEG'] - hits['X_WIRE'])
+    hits['DIST_SEG_WIRE'] = hits['X_SEG'] - hits['X_WIRE']
+    hits["ABS_DIST_SEG_WIRE"] = np.abs(hits["DIST_SEG_WIRE"])
 
-# Recalculate rate in case of multiple files
-runtime = (hits['ORBIT'].max() - hits['ORBIT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
-occupancy['RATE'] = occupancy['COUNTS'] / runtime
+    # Residuals from tracks
+    hits['RESIDUES_TRACK'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_TRACK'] - hits['X_WIRE'])
+    hits['DIST_TRACK_WIRE'] = hits['X_TRACK'] - hits['X_WIRE']
+    hits["ABS_DIST_TRACK_WIRE"] = np.abs(hits["DIST_TRACK_WIRE"])
 
-hits = hits[hits['T0'].notnull()]
+    # Disentangle tracks and segments
+    parlabel = {'ANGLE_RAD' : 'Angle (rad)', 'ANGLE_DEG' : 'Angle ($^o$)', 'Q' : 'Intercept', 'M' : 'Angular coefficient', 'X0' : '$x_{0}$ (mm)', 'NHITS' : 'number of hits'}
+    parbins = {'ANGLE_RAD' : np.arange(-np.pi, np.pi, 0.1), 'ANGLE_DEG' : np.arange(-50., 50., 1.), 'Q' : np.arange(-10000., 10000., 100.), 'M' : np.arange(-1000., 1000., 10.), 'X0' : np.arange(-336., 336., 8.), 'NHITS' : np.arange(-0.5, 12.5, 1)}
+    segments['ANGLE_RAD'] = np.arctan(segments['M'])
+    segments['ANGLE_RAD'] = np.where(segments['ANGLE_RAD'] < 0, segments['ANGLE_RAD'] + math.pi/2., segments['ANGLE_RAD'] - math.pi/2.)
+    #segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] = segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] + np.pi # shift angle by pi
+    segments['ANGLE_DEG'] = np.degrees(segments['ANGLE_RAD']) #- 90.
+    segments['X0'] = - segments['Q'] / segments['M']
 
-hits['X_DRIFT'] = hits['TIMENS'] * VDRIFT
+    tracks = segments.loc[segments['VIEW'] != '0']
+    segments = segments.loc[segments['VIEW'] == '0']
 
-# Residuals
-hits['RESIDUES_SEG'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_SEG'] - hits['X_WIRE'])
-hits['DIST_SEG_WIRE'] = hits['X_SEG'] - hits['X_WIRE']
-hits["ABS_DIST_SEG_WIRE"] = np.abs(hits["DIST_SEG_WIRE"])
+    print("Numer of global tracks:", len(tracks[tracks['CHAMBER'].str.len() > 1]))
 
-# Residuals from tracks
-hits['RESIDUES_TRACK'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_TRACK'] - hits['X_WIRE'])
-hits['DIST_TRACK_WIRE'] = hits['X_TRACK'] - hits['X_WIRE']
-hits["ABS_DIST_TRACK_WIRE"] = np.abs(hits["DIST_TRACK_WIRE"])
+    segments['XL1'] = -(-19.5 + segments['Q']) / segments['M']
+    segments['XL2'] = -(- 6.5 + segments['Q']) / segments['M']
+    segments['XL3'] = -(+ 6.5 + segments['Q']) / segments['M']
+    segments['XL4'] = -(+19.5 + segments['Q']) / segments['M']
 
-# Disentangle tracks and segments
-parlabel = {'ANGLE_RAD' : 'Angle (rad)', 'ANGLE_DEG' : 'Angle ($^o$)', 'Q' : 'Intercept', 'M' : 'Angular coefficient', 'X0' : '$x_{0}$ (mm)', 'NHITS' : 'number of hits'}
-parbins = {'ANGLE_RAD' : np.arange(-np.pi, np.pi, 0.1), 'ANGLE_DEG' : np.arange(-50., 50., 1.), 'Q' : np.arange(-10000., 10000., 100.), 'M' : np.arange(-1000., 1000., 10.), 'X0' : np.arange(-336., 336., 8.), 'NHITS' : np.arange(-0.5, 12.5, 1)}
-segments['ANGLE_RAD'] = np.arctan(segments['M'])
-segments['ANGLE_RAD'] = np.where(segments['ANGLE_RAD'] < 0, segments['ANGLE_RAD'] + math.pi/2., segments['ANGLE_RAD'] - math.pi/2.)
-#segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] = segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] + np.pi # shift angle by pi
-segments['ANGLE_DEG'] = np.degrees(segments['ANGLE_RAD']) #- 90.
-segments['X0'] = - segments['Q'] / segments['M']
-
-tracks = segments.loc[segments['VIEW'] != '0']
-segments = segments.loc[segments['VIEW'] == '0']
-
-print("Numer of global tracks:", len(tracks[tracks['CHAMBER'].str.len() > 1]))
-
-segments['XL1'] = -(-19.5 + segments['Q']) / segments['M']
-segments['XL2'] = -(- 6.5 + segments['Q']) / segments['M']
-segments['XL3'] = -(+ 6.5 + segments['Q']) / segments['M']
-segments['XL4'] = -(+19.5 + segments['Q']) / segments['M']
-
-
-# Occupancy
-if 'occupancy' in args.plot:
-    if not os.path.exists(args.outputdir + runname + "_plots/occupancy/"): os.makedirs(args.outputdir + runname + "_plots/occupancy/")
-    
-    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
-    for chamber in range(4):
-        axs[-chamber-1].set_title("Occupancy [SL %d]" % (chamber))
-        axs[-chamber-1].set_xlabel("Wire number")
-        axs[-chamber-1].set_xticks(range(1, 17))
-        axs[-chamber-1].set_ylabel("Layer")
-        axs[-chamber-1].set_yticks(range(1, 5))
-        h = axs[-chamber-1].hist2d(occupancy.loc[occupancy['SL'] == chamber, 'WIRE_NUM'], occupancy.loc[occupancy['SL'] == chamber, 'LAYER'], weights=occupancy.loc[occupancy['SL'] == chamber, 'COUNTS'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]]) #, vmin=0, vmax=np.max(occupancy['COUNTS']))
-        cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
-        cbar.set_label("Counts")
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts.png")
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts.pdf")
-    plt.close(fig)
-
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
-    for chamber in range(4):
-        for layer in range(4):
-            occ = occupancy[((occupancy['SL'] == chamber) & (occupancy['LAYER'] == layer+1) & (occupancy['WIRE_NUM'] <= 16))]
-            axs[-chamber-1][layer].set_title("Occupancy [SL %d, LAYER %d]" % (chamber, layer+1))
-            axs[-chamber-1][layer].set_xlabel("Wire number")
-            axs[-chamber-1][layer].set_ylabel("Counts")
-            axs[-chamber-1][layer].set_xticks(range(1, 17))
-            axs[-chamber-1][layer].bar(occ['WIRE_NUM'], occ['COUNTS'])
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts_vs_wire.png")
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts_vs_wire.pdf")
-    plt.close(fig)
-
-
-    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
-    for chamber in range(4):
-        axs[-chamber-1].set_title("Rate [SL %d]" % (chamber))
-        axs[-chamber-1].set_xlabel("Wire number")
-        axs[-chamber-1].set_xticks(range(1, 17))
-        axs[-chamber-1].set_ylabel("Layer")
-        axs[-chamber-1].set_yticks(range(1, 5))
-        h = axs[-chamber-1].hist2d(occupancy.loc[occupancy['SL'] == chamber, 'WIRE_NUM'], occupancy.loc[occupancy['SL'] == chamber, 'LAYER'], weights=occupancy.loc[occupancy['SL'] == chamber, 'RATE'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]]) #, vmin=0, vmax=np.max(occupancy['RATE']))
-        cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
-        cbar.set_label("Rate (Hz)")
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate.png")
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate.pdf")
-    plt.close(fig)
-
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
-    for chamber in range(4):
-        for layer in range(4):
-            occ = occupancy[((occupancy['SL'] == chamber) & (occupancy['LAYER'] == layer+1) & (occupancy['WIRE_NUM'] <= 16))]
-            axs[-chamber-1][layer].set_title("Rate [SL %d, LAYER %d]" % (chamber, layer+1))
-            axs[-chamber-1][layer].set_xlabel("Wire number")
-            axs[-chamber-1][layer].set_ylabel("Rate (Hz)")
-            axs[-chamber-1][layer].set_xticks(range(1, 17))
-            axs[-chamber-1][layer].bar(occ['WIRE_NUM'], occ['RATE'])
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate_vs_wire.png")
-    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate_vs_wire.pdf")
-    plt.close(fig)
-    
 
 # Timebox
 if 'boxes' in args.plot:
@@ -838,6 +772,72 @@ if 'missinghits' in args.plot:
     '''
 
 
+# Occupancy
+if 'occupancy' in args.plot:
+    if not os.path.exists(args.outputdir + runname + "_plots/occupancy/"): os.makedirs(args.outputdir + runname + "_plots/occupancy/")
+    
+    occupancy = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "occupancy*.csv"))))
+    
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
+    for chamber in range(4):
+        axs[-chamber-1].set_title("Occupancy [SL %d]" % (chamber))
+        axs[-chamber-1].set_xlabel("Wire number")
+        axs[-chamber-1].set_xticks(range(1, 17))
+        axs[-chamber-1].set_ylabel("Layer")
+        axs[-chamber-1].set_yticks(range(1, 5))
+        h = axs[-chamber-1].hist2d(occupancy.loc[occupancy['SL'] == chamber, 'WIRE_NUM'], occupancy.loc[occupancy['SL'] == chamber, 'LAYER'], weights=occupancy.loc[occupancy['SL'] == chamber, 'COUNTS'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]]) #, vmin=0, vmax=np.max(occupancy['COUNTS']))
+        cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
+        cbar.set_label("Counts")
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts.png")
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts.pdf")
+    plt.close(fig)
+
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
+    for chamber in range(4):
+        for layer in range(4):
+            occ = occupancy[((occupancy['SL'] == chamber) & (occupancy['LAYER'] == layer+1) & (occupancy['WIRE_NUM'] <= 16))]
+            axs[-chamber-1][layer].set_title("Occupancy [SL %d, LAYER %d]" % (chamber, layer+1))
+            axs[-chamber-1][layer].set_xlabel("Wire number")
+            axs[-chamber-1][layer].set_ylabel("Counts")
+            axs[-chamber-1][layer].set_xticks(range(1, 17))
+            axs[-chamber-1][layer].bar(occ['WIRE_NUM'], occ['COUNTS'])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts_vs_wire.png")
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/counts_vs_wire.pdf")
+    plt.close(fig)
+
+
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
+    for chamber in range(4):
+        axs[-chamber-1].set_title("Rate [SL %d]" % (chamber))
+        axs[-chamber-1].set_xlabel("Wire number")
+        axs[-chamber-1].set_xticks(range(1, 17))
+        axs[-chamber-1].set_ylabel("Layer")
+        axs[-chamber-1].set_yticks(range(1, 5))
+        h = axs[-chamber-1].hist2d(occupancy.loc[occupancy['SL'] == chamber, 'WIRE_NUM'], occupancy.loc[occupancy['SL'] == chamber, 'LAYER'], weights=occupancy.loc[occupancy['SL'] == chamber, 'RATE'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]]) #, vmin=0, vmax=np.max(occupancy['RATE']))
+        cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
+        cbar.set_label("Rate (Hz)")
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate.png")
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate.pdf")
+    plt.close(fig)
+
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
+    for chamber in range(4):
+        for layer in range(4):
+            occ = occupancy[((occupancy['SL'] == chamber) & (occupancy['LAYER'] == layer+1) & (occupancy['WIRE_NUM'] <= 16))]
+            axs[-chamber-1][layer].set_title("Rate [SL %d, LAYER %d]" % (chamber, layer+1))
+            axs[-chamber-1][layer].set_xlabel("Wire number")
+            axs[-chamber-1][layer].set_ylabel("Rate (Hz)")
+            axs[-chamber-1][layer].set_xticks(range(1, 17))
+            axs[-chamber-1][layer].bar(occ['WIRE_NUM'], occ['RATE'])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate_vs_wire.png")
+    fig.savefig(args.outputdir + runname + "_plots/occupancy/rate_vs_wire.pdf")
+    plt.close(fig)
+    
+
 if 'alignment' in args.plot:
     if not os.path.exists(args.outputdir + runname + "_plots/alignment/"): os.makedirs(args.outputdir + runname + "_plots/alignment/")
     '''
@@ -950,6 +950,7 @@ if 'trigger' in args.plot:
         plt.xlim(trigger_plots[p]["xlim"])
         plt.tight_layout()
         plt.savefig(args.outputdir + runname + "_plots/trigger/" + p + ".pdf")
+        plt.savefig(args.outputdir + runname + "_plots/trigger/" + p + ".png")
     
     
         plt.figure(figsize=(8, 6))
@@ -972,6 +973,7 @@ if 'trigger' in args.plot:
         plt.xlim(trigger_plots[p]["xlim"])
         plt.tight_layout()
         plt.savefig(args.outputdir + runname + "_plots/trigger/" + p + "_all.pdf")
+        plt.savefig(args.outputdir + runname + "_plots/trigger/" + p + "_all.png")
 
 
     plt.figure(figsize=(8, 6))
@@ -994,6 +996,7 @@ if 'trigger' in args.plot:
     plt.xlim(effRange[0], effRange[-1])
     plt.tight_layout()
     plt.savefig(args.outputdir + runname + "_plots/trigger/efficiency.pdf")
+    plt.savefig(args.outputdir + runname + "_plots/trigger/efficiency.png")
 
     '''
     # Difference between local and global fit
