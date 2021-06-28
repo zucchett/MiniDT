@@ -11,13 +11,15 @@ import mplhep as hep
 from scipy.stats import norm
 from scipy.optimize import curve_fit
 from modules.mapping.config import TDRIFT, VDRIFT, DURATION, TIME_WINDOW, XCELL, ZCELL
+#from modules.reco import config_1_2_1 as config
 from modules.reco import config_3_1 as config
 
 import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
+parser.add_argument("-a", "--all", action="store_true", default=False, dest="all", help="Plot all categories")
 parser.add_argument("-i", "--inputfile", action="store", type=str, dest="inputdir", default="./output/Run000967_csv/", help="Provide directory of the input files (csv)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
-parser.add_argument("-p", "--plot", action="store", type=str, dest="plot", default="occupancy,boxes,parameters,residues,missinghits,alignment,trigger", help="Specify output directory")
+parser.add_argument("-p", "--plot", action="store", type=str, dest="plot", default="boxes,residues,res2D,resolution,tappini,missinghits,occupancy,parameters,alignment,trigger", help="Specify plot category")
 parser.add_argument("-v", "--verbose", action="store", type=int, default=0, dest="verbose", help="Specify verbosity level")
 args = parser.parse_args()
 
@@ -43,6 +45,10 @@ chi2bins = np.array([0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.
 iax = [(i, j) for i in range(2) for j in range(2)]
 isl = range(4)
 ila = range(1, 4+1)
+
+parlabel = {'ANGLE_RAD' : 'Angle (rad)', 'ANGLE_DEG' : 'Angle ($^o$)', 'Q' : 'Intercept', 'M' : 'Angular coefficient', 'X0' : '$x_{0}$ (mm)', 'NHITS' : 'number of hits'}
+parunits = {'ANGLE_RAD' : 'rad', 'ANGLE_DEG' : '^o', 'Q' : 'mm', 'M' : '', 'X0' : 'mm', 'NHITS' : ''}
+parbins = {'ANGLE_RAD' : np.arange(-np.pi, np.pi, 0.1), 'ANGLE_DEG' : np.arange(-50., 50., 1.), 'Q' : np.arange(-10000., 10000., 100.), 'M' : np.arange(-1000., 1000., 10.), 'X0' : np.arange(-336., 336., 8.), 'NHITS' : np.arange(-0.5, 12.5, 1)}
 
 trigger_plots = {
     "time_trigger_vs_scint" : {
@@ -136,76 +142,79 @@ def fitGaus(axs, ybins, xbins, patches):
         print("[ WARNING ] Fit unsuccessful")
         return 0, 0, 0
 
+def plotHist(axs, data, name, title, unit, bins, label, linecolor, markercolor, markerstyle, norm=False, fit="Gaus"):
+    axs.set_title(name)
+    axs.set_xlabel(title + " [" + unit + "]")
+    if isinstance(data, np.ndarray): bin_heights, bin_borders = data, bins
+    else: bin_heights, bin_borders = np.histogram(data.dropna(), range=(bins[0], bins[-1]), bins=bins)
+    bin_centers = bin_borders[:-1] + np.diff(bin_borders) / 2
+    integral = np.sum(bin_heights)
+    if not integral > 0.: return
+    mean = np.average(bin_centers, weights=bin_heights)
+    rms = np.sqrt(np.average((bin_centers - mean)**2, weights=bin_heights))
+    bin_errors = np.sqrt(bin_heights)
+    if norm: bin_heights, bin_errors = bin_heights / integral, bin_errors / integral
+    if fit=="Gaus" and integral > 100:
+        popt, pcov = curve_fit(gaus, bin_centers, bin_heights, maxfev=10000, p0=[integral, mean, rms])
+        x_interval_for_fit = np.linspace(bin_borders[0], bin_borders[-1], 1000)
+        axs.plot(x_interval_for_fit, gaus(x_interval_for_fit, *popt), color=linecolor, lw=1)
+        nargs = label.count('%')
+        if nargs == 2: label_string = label % (abs(popt[2]), unit)
+        elif nargs == 4: label_string = label % (popt[1], unit, abs(popt[2]), unit)
+        else: label_string = label
+    else:
+        popt, pcov, label_string = [], [], label
+    line = axs.errorbar(bin_centers, bin_heights, yerr=bin_errors, fmt=markerstyle, color=markercolor, alpha=1, markersize=6, zorder=1, label=label_string)[0]
+    line.set_clip_on(False)
+    axs.legend()
+    return popt
+
 
 
 runname = [x for x in args.inputdir.split('/') if 'Run' in x][0].replace("_csv", "") if "Run" in args.inputdir else "Run000000"
 
 if args.verbose >= 1: print("Writing plots in directory %s_plots/" % (args.outputdir + runname))
 
-if args.plot in "boxes,parameters,residues,missinghits":
-    #if len(args.outputdir + runname) > 0:
-    #    if not os.path.exists(args.outputdir + runname): os.makedirs(args.outputdir + runname)
-    #    for d in ["occupancy", "timebox", "parameters", "residuals", "missinghits", "alignment", "trigger"]:
-    #        if not os.path.exists(args.outputdir + runname + "/" + d + "/"): os.makedirs(args.outputdir + runname + "/" + d + "/")
+# Read files in blocks
+hits, segments, missignhits, occupancy, ex, mt, nA, nT = None, None, None, None, None, None, None, None
+
+#if len(args.outputdir + runname) > 0:
+#    if not os.path.exists(args.outputdir + runname): os.makedirs(args.outputdir + runname)
+#    for d in ["occupancy", "timebox", "parameters", "residuals", "missinghits", "alignment", "trigger"]:
+#        if not os.path.exists(args.outputdir + runname + "/" + d + "/"): os.makedirs(args.outputdir + runname + "/" + d + "/")
 
 
-    #hits = pd.read_csv(args.inputdir + "/events.csv", skiprows=0, low_memory=False)
-    #segments = pd.read_csv(args.inputdir + "/segments.csv", dtype={'CHAMBER': object}, skiprows=0, low_memory=False)
-    #missinghits = pd.read_csv(args.inputdir + "/missinghits.csv", skiprows=0, low_memory=False)
-    #occupancy = pd.read_csv(args.inputdir + "/occupancy.csv", skiprows=0, low_memory=False)
+#hits = pd.read_csv(args.inputdir + "/events.csv", skiprows=0, low_memory=False)
+#segments = pd.read_csv(args.inputdir + "/segments.csv", dtype={'CHAMBER': object}, skiprows=0, low_memory=False)
+#missinghits = pd.read_csv(args.inputdir + "/missinghits.csv", skiprows=0, low_memory=False)
+#occupancy = pd.read_csv(args.inputdir + "/occupancy.csv", skiprows=0, low_memory=False)
 
-    hits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "events*.csv"))))
-    segments = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "segments*.csv"))))
-    missinghits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "missinghits*.csv"))))
+hits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "events*.csv"))))    
 
+if args.verbose >= 1: print("Read %d lines from events.csv" % (len(hits), ))
+if args.verbose >= 2: print(hits.head(50))
 
-    if args.verbose >= 1: print("Read %d lines from events.csv" % (len(hits), ))
-    if args.verbose >= 2: print(hits.head(50))
-    if args.verbose >= 1: print("Read %d lines from segments.csv" % (len(segments), ))
-    if args.verbose >= 2:
-        print(segments.head(50))
-        print(segments.tail(50))
+# Recalculate rate in case of multiple files
+runtime = (hits['ORBIT'].max() - hits['ORBIT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
 
-    # Recalculate rate in case of multiple files
-    runtime = (hits['ORBIT'].max() - hits['ORBIT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
-    occupancy['RATE'] = occupancy['COUNTS'] / runtime
+hits = hits[hits['T0'].notnull()]
 
-    hits = hits[hits['T0'].notnull()]
+hits['X_DRIFT'] = hits['TIMENS'] * VDRIFT
 
-    hits['X_DRIFT'] = hits['TIMENS'] * VDRIFT
+# Residuals
+hits['RESIDUES_SEG'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_SEG'] - hits['X_WIRE'])
+hits['DIST_SEG_WIRE'] = hits['X_SEG'] - hits['X_WIRE']
+hits["ABS_DIST_SEG_WIRE"] = np.abs(hits["DIST_SEG_WIRE"])
 
-    # Residuals
-    hits['RESIDUES_SEG'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_SEG'] - hits['X_WIRE'])
-    hits['DIST_SEG_WIRE'] = hits['X_SEG'] - hits['X_WIRE']
-    hits["ABS_DIST_SEG_WIRE"] = np.abs(hits["DIST_SEG_WIRE"])
+# Residuals from tracks
+hits['RESIDUES_TRACK'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_TRACK'] - hits['X_WIRE'])
+hits['DIST_TRACK_WIRE'] = hits['X_TRACK'] - hits['X_WIRE']
+hits["ABS_DIST_TRACK_WIRE"] = np.abs(hits["DIST_TRACK_WIRE"])
 
-    # Residuals from tracks
-    hits['RESIDUES_TRACK'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_TRACK'] - hits['X_WIRE'])
-    hits['DIST_TRACK_WIRE'] = hits['X_TRACK'] - hits['X_WIRE']
-    hits["ABS_DIST_TRACK_WIRE"] = np.abs(hits["DIST_TRACK_WIRE"])
-
-    # Disentangle tracks and segments
-    parlabel = {'ANGLE_RAD' : 'Angle (rad)', 'ANGLE_DEG' : 'Angle ($^o$)', 'Q' : 'Intercept', 'M' : 'Angular coefficient', 'X0' : '$x_{0}$ (mm)', 'NHITS' : 'number of hits'}
-    parbins = {'ANGLE_RAD' : np.arange(-np.pi, np.pi, 0.1), 'ANGLE_DEG' : np.arange(-50., 50., 1.), 'Q' : np.arange(-10000., 10000., 100.), 'M' : np.arange(-1000., 1000., 10.), 'X0' : np.arange(-336., 336., 8.), 'NHITS' : np.arange(-0.5, 12.5, 1)}
-    segments['ANGLE_RAD'] = np.arctan(segments['M'])
-    segments['ANGLE_RAD'] = np.where(segments['ANGLE_RAD'] < 0, segments['ANGLE_RAD'] + math.pi/2., segments['ANGLE_RAD'] - math.pi/2.)
-    #segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] = segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] + np.pi # shift angle by pi
-    segments['ANGLE_DEG'] = np.degrees(segments['ANGLE_RAD']) #- 90.
-    segments['X0'] = - segments['Q'] / segments['M']
-
-    tracks = segments.loc[segments['VIEW'] != '0']
-    segments = segments.loc[segments['VIEW'] == '0']
-
-    print("Numer of global tracks:", len(tracks[tracks['CHAMBER'].str.len() > 1]))
-
-    segments['XL1'] = -(-19.5 + segments['Q']) / segments['M']
-    segments['XL2'] = -(- 6.5 + segments['Q']) / segments['M']
-    segments['XL3'] = -(+ 6.5 + segments['Q']) / segments['M']
-    segments['XL4'] = -(+19.5 + segments['Q']) / segments['M']
 
 
 # Timebox
-if 'boxes' in args.plot:
+def plotBoxes():
     if not os.path.exists(args.outputdir + runname + "_plots/boxes/"): os.makedirs(args.outputdir + runname + "_plots/boxes/")
 
     fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(40, 20))
@@ -222,7 +231,7 @@ if 'boxes' in args.plot:
     fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
     for chamber in range(4):
         for layer in range(4):
-            axs[-chamber-1][layer].set_title("Timebox [SL %d, LAYER %d]" % (chamber, layer))
+            axs[-chamber-1][layer].set_title("Timebox [SL %d, LAYER %d]" % (chamber, layer+1))
             axs[-chamber-1][layer].set_xlabel("Time (ns)")
             axs[-chamber-1][layer].set_ylabel("Counts")
             axs[-chamber-1][layer].hist(hits.loc[(hits['CHAMBER']==chamber) & (hits['LAYER']==layer+1), 'TIMENS'], bins=np.arange(-50, 550+1, 5), label='Drift time (ns)')
@@ -230,6 +239,20 @@ if 'boxes' in args.plot:
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/boxes/timebox_vs_chamber_layer.png")
     fig.savefig(args.outputdir + runname + "_plots/boxes/timebox_vs_chamber_layer.pdf")
+    plt.close(fig)
+    
+    fig, axs = plt.subplots(nrows=4 * 4, ncols=16, figsize=(80, 60))
+    for cell in range(16):
+        for chamber in range(4):
+            for layer in range(4):
+                axs[-chamber*4-layer-1][cell].set_title("[SL %d, LAYER %d, WIRE %d]" % (chamber, layer+1, cell+1))
+                #axs[-chamber*4-layer-1][cell].set_xlabel("Time (ns)")
+                #axs[-chamber*4-layer-1][cell].set_ylabel("Counts")
+                axs[-chamber*4-layer-1][cell].hist(hits.loc[(hits['CHAMBER']==chamber) & (hits['LAYER']==layer+1) & (hits['WIRE']==cell+1), 'TIMENS'], bins=np.arange(-50, 550+1, 5), label='Drift time (ns)')
+                #axs[-chamber*4-layer-1][cell].legend()
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/boxes/timebox_vs_wire.png")
+    fig.savefig(args.outputdir + runname + "_plots/boxes/timebox_vs_wire.pdf")
     plt.close(fig)
     
     # Space boxes
@@ -263,190 +286,135 @@ if 'boxes' in args.plot:
     plt.close(fig)
 
 
-# Parameters
-if 'parameters' in args.plot:
+
+def plotResidues():
+    if not os.path.exists(args.outputdir + runname + "_plots/residues/"): os.makedirs(args.outputdir + runname + "_plots/residues/")
     
-    # Chi2
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
-    for idx, chamber in zip(iax, isl):
-        axs[idx].set_title("Segments $\chi^2$ [SL %d]" % chamber)
-        axs[idx].set_xlabel("$\chi^2$")
-        axs[idx].set_ylabel("Counts")
-        axs[idx].hist(segments.loc[segments['CHAMBER'].astype('int32') == chamber, 'CHI2'], bins=chi2bins)
-        axs[idx].set_xscale("log")
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_chi2.png")
-    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_chi2.pdf")
-    plt.close(fig)
-
-    fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(15, 10))
-    for w, view in enumerate(['XZ', 'YZ']):
-        axs[w].set_title("Track $\chi^2$ [%s]" % view)
-        axs[w].set_xlabel("$\chi^2$")
-        axs[w].set_ylabel("Counts")
-        axs[w].hist(tracks.loc[(tracks['VIEW'] == view), 'CHI2'], bins=chi2bins)
-        axs[w].set_xscale("log")
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/parameters/track_chi2.png")
-    fig.savefig(args.outputdir + runname + "_plots/parameters/track_chi2.pdf")
-    plt.close(fig)
-
-
-    # Parameters
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
-    for i, p in enumerate(['ANGLE_DEG', 'Q', 'X0', 'NHITS']):
-        for chamber in range(4):
-            axs[i][chamber].set_title("Segments %s [SL %d]" % (p, chamber))
-            axs[i][chamber].set_xlabel(parlabel[p])
-            axs[i][chamber].hist(segments.loc[segments['CHAMBER'].astype('int32') == chamber, p], bins=parbins[p])
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_par.png")
-    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_par.pdf")
-    plt.close(fig)
-
-    fig, axs = plt.subplots(nrows=4, ncols=2, figsize=(15, 10))
-    for w, view in enumerate(['XZ', 'YZ']):
-        for i, p in enumerate(['ANGLE_DEG', 'Q', 'X0', 'NHITS']):
-            axs[i][w].set_title("Tracks %s [%s]" % (p, view))
-            axs[i][w].set_xlabel(parlabel[p])
-            axs[i][w].hist(tracks[p], bins=parbins[p])
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/parameters/tracks_par.png")
-    fig.savefig(args.outputdir + runname + "_plots/parameters/tracks_par.pdf")
-    plt.close(fig)
-    
-    # X0
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
-    for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        axs[idx].set_title("Segment $x_{l}$ [CHAMBER %d, LAYER %d]" % (chamber, layer))
-        axs[idx].set_xlabel(parlabel[p])
-        axs[idx].hist(segments.loc[(segments['CHAMBER'] == str(chamber)), 'XL%d' % layer].dropna(), bins=parbins['X0'])
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_x0_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_x0_chamber_layer.pdf")
-    plt.close(fig)
-
-
-if 'residues' in args.plot:
+    nhits = {}
+    for num_hits in [0, 3, 4]: nhits[num_hits] = hits.loc[(hits['NHITS_SEG'] == num_hits)] if num_hits != 0 else hits
     
     # Residuals from Segments
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
     for idx, chamber in zip(iax, isl):
-        axs[idx].set_title("Local residues [SL %d]" % chamber)
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hits.loc[hits['CHAMBER'] == chamber, 'RESIDUES_SEG'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+        for num_hits in [0, 3, 4]:
+            pars = plotHist(axs[idx], data=nhits[num_hits].loc[nhits[num_hits]['CHAMBER'] == chamber, 'RESIDUES_SEG'], name="Local residues [SL %d]" % chamber, title="|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+            if num_hits == 0: print("Time calibration CHAMBER %d:\t%.1f ns" % (chamber, -pars[1]/VDRIFT *1.5))
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_seg_chamber.png")
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_seg_chamber.pdf")
     plt.close(fig)
 
-
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
     for idx, layer in zip(iax, ila):
-        axs[idx].set_title("Local residues [LAYER %d]" % layer)
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hits.loc[hits['LAYER'] == layer, 'RESIDUES_SEG'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+        for num_hits in [0, 3, 4]:
+            plotHist(axs[idx], data=nhits[num_hits].loc[nhits[num_hits]['LAYER'] == layer, 'RESIDUES_SEG'], name="Local residues [LAYER %d]" % layer, title="|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_seg_layer.png")
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_seg_layer.pdf")
     plt.close(fig)
 
-
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
     for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer)]
-        axs[idx].set_title("Local residues [CHAMBER %d, LAYER %d]" % (chamber, layer))
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hitsl['RESIDUES_SEG'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
+        for num_hits in [0, 3, 4]:
+            plotHist(axs[idx], data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['LAYER'] == layer), 'RESIDUES_SEG'], name="Local residues [CHAMBER %d, LAYER %d]" % (chamber, layer), title="|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_seg_chamber_layer.png")
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_seg_chamber_layer.pdf")
     plt.close(fig)
-
+    
 
     # Residuals from Tracks
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
     for idx, chamber in zip(iax, isl):
-        axs[idx].set_title("Global residues [SL %d]" % chamber)
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hits.loc[hits['CHAMBER'] == chamber, 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+        for num_hits in [0, 3, 4]:
+            plotHist(axs[idx], data=nhits[num_hits].loc[nhits[num_hits]['CHAMBER'] == chamber, 'RESIDUES_TRACK'], name="Global residues [SL %d]" % chamber, title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_chamber.png")
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_chamber.pdf")
     plt.close(fig)
 
 
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
     for idx, layer in zip(iax, ila):
-        axs[idx].set_title("Global residues [LAYER %d]" % layer)
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hits.loc[hits['LAYER'] == layer, 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+        for num_hits in [0, 3, 4]:
+            plotHist(axs[idx], data=nhits[num_hits].loc[nhits[num_hits]['LAYER'] == layer, 'RESIDUES_TRACK'], name="Global residues [LAYER %d]" % layer, title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_layer.png")
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_layer.pdf")
     plt.close(fig)
 
 
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
     for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        axs[idx].set_title("Global residues [CHAMBER %d, LAYER %d]" % (chamber, layer))
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hits.loc[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer), 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
+        for num_hits in [0, 3, 4]:
+            plotHist(axs[idx], data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['LAYER'] == layer), 'RESIDUES_TRACK'], name="Global residues [CHAMBER %d, LAYER %d]" % (chamber, layer), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_chamber_layer.png")
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_chamber_layer.pdf")
     plt.close(fig)
 
-    '''
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
-    for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        axs[idx].set_title("Global LEFT residues [CHAMBER %d, LAYER %d]" % (chamber, layer))
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hits.loc[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['X_LABEL'] == 1), 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+    # Tracks L/R
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
+    for idx, chamber in zip(iax, isl):
+        for num_hits in [0, 3, 4]:
+            plotHist(axs[idx], data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['X_LABEL'] == 1), 'RESIDUES_TRACK'], name="Global LEFT residues [CHAMBER %d]" % (chamber), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_left_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_left_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_left_chamber.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_left_chamber.pdf")
     plt.close(fig)
     
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
-    for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        axs[idx].set_title("Global RIGHT residues [CHAMBER %d, LAYER %d]" % (chamber, layer))
-        axs[idx].set_xlabel("|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$| (mm)")
-        ybins, xbins, patches = axs[idx].hist(hits.loc[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['X_LABEL'] == 2), 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
-        fitGaus(axs[idx], ybins, xbins, patches)
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
+    for idx, chamber in zip(iax, isl):
+        for num_hits in [0, 3, 4]:
+            plotHist(axs[idx], data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['X_LABEL'] == 2), 'RESIDUES_TRACK'], name="Global RIGHT residues [CHAMBER %d]" % (chamber), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_right_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_right_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_right_chamber.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_track_right_chamber.pdf")
     plt.close(fig)
-    '''
+    
+    # Symmetric combination: (sx + dx) / 2
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
+    for idx, chamber in zip(iax, isl):
+        for num_hits in [0, 3, 4]:
+            sx, sx_borders = np.histogram(nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['X_LABEL'] == 1), 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
+            dx, dx_borders = np.histogram(nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['X_LABEL'] == 2), 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
+            symm = (sx + dx) * 0.5
+            plotHist(axs[idx], data=symm, name="Global (RIGHT+LEFT)/2 residues [CHAMBER %d]" % (chamber), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_symm_track_chamber.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_symm_track_chamber.pdf")
+    plt.close(fig)
+    
+    # Antisymmetric combination: (sx - dx) / 2
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
+    for idx, chamber in zip(iax, isl):
+        for num_hits in [0, 3, 4]:
+            sx, sx_borders = np.histogram(nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['X_LABEL'] == 1), 'RESIDUES_TRACK'].dropna(), bins=np.arange(-4., 4., 0.05))
+            dx, dx_borders = np.histogram(nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['X_LABEL'] == 2), 'RESIDUES_TRACK'].dropna()*-1., bins=np.arange(-4., 4., 0.05))
+            symm = (sx + dx) * 0.5
+            pars = plotHist(axs[idx], data=symm, name="Global (RIGHT-LEFT)/2 residues [CHAMBER %d]" % (chamber), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+            if chamber == config.SL_TEST and num_hits == 0 and pars is not None: print("Offset calibration CHAMBER %d:\t%.2f mm" % (chamber, pars[1]))
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_asym_track_chamber.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues/residues_asym_track_chamber.pdf")
+    plt.close(fig)
 
-    '''
+
+def plotResidues2D():
+
+    if not os.path.exists(args.outputdir + runname + "_plots/residues2D/"): os.makedirs(args.outputdir + runname + "_plots/residues2D/")
+    
     # Residues from Segments 2D
     jgrid = sns.jointplot(data=hits, dropna=True, x="TIMENS", y="RESIDUES_SEG", kind="reg", scatter_kws={'s': 0.1})
     jgrid.set_axis_labels("$t_{drift}$ (ns)", "|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$| (mm)")
     jgrid.ax_joint.set_ylim(-2., 2)
     jgrid.ax_marg_y.set_ylim(-2., 2)
-    jgrid.savefig(args.outputdir + runname + "_plots/residues_seg_tdrift_joint.png")
-    jgrid.savefig(args.outputdir + runname + "_plots/residues_seg_tdrift_joint.pdf")
+    jgrid.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_tdrift_joint.png")
+    jgrid.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_tdrift_joint.pdf")
 
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
     for idx, chamber in zip(iax, isl):
         jgrid = sns.jointplot(ax=axs[idx], data=hits.loc[hits['CHAMBER'] == chamber, ['RESIDUES_SEG', 'TIMENS']].dropna(how="any"), x="TIMENS", y="RESIDUES_SEG", kind="reg", scatter_kws={'s': 0.1})
         jgrid.set_axis_labels("$t_{drift}$ (ns)", "$x$ - $x_{fit}$ (mm)")
@@ -457,8 +425,8 @@ if 'residues' in args.plot:
         jgrid.ax_marg_y.set_ylim(-2.5, +2.5)
         jgrid = sns.jointplot(ax=axs[idx], data=hits.loc[hits['CHAMBER'] == chamber, ['RESIDUES_SEG', 'TIMENS']].dropna(how="any"), x="TIMENS", y="RESIDUES_SEG", kind="hist")
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_tdrift.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_tdrift.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_tdrift.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_tdrift.pdf")
     plt.close(fig)
 
 
@@ -471,8 +439,8 @@ if 'residues' in args.plot:
     jgrid.ax_marg_y.set_ylim(-2., 2)
     jgrid.ax_joint.set_xlim(0., 21.)
     jgrid.ax_marg_x.set_xlim(0., 21.)
-    jgrid.savefig(args.outputdir + runname + "_plots/residues_seg_pos_joint.png")
-    jgrid.savefig(args.outputdir + runname + "_plots/residues_seg_pos_joint.pdf")
+    jgrid.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_joint.png")
+    jgrid.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_joint.pdf")
 
 
     fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
@@ -487,14 +455,15 @@ if 'residues' in args.plot:
         axs[idx].set_ylim(-2., +2.)
         axs[idx].set_ylim(-2., +2.)
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_pos_chamber.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_pos_chamber.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_chamber.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_chamber.pdf")
     plt.close(fig)
-    '''
-    '''
+    
+    
     fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(15, 10))
     for idx, layer in zip(iax, ila):
-        hitsl = hits[hits['LAYER'] == layer]
+        hitsl = hits[hits['LAYER'] == layer].dropna()
+        if not len(hitsl) > 0: continue
         jgrid = sns.jointplot(ax=axs[idx], x=hitsl["ABS_DIST_SEG_WIRE"], y=hitsl["RESIDUES_SEG"], dropna=True, kind="hist")
         jgrid.plot_joint(sns.regplot, ax=axs[idx], order=1, scatter=False, color=".3")
         axs[idx].set_title("Residues vs position [LAYER %d]" % layer)
@@ -507,16 +476,16 @@ if 'residues' in args.plot:
         sns.lineplot(x=np.linspace(4, 18), y=p1 + p0 * np.linspace(4, 18), ax=axs[idx], linewidth=2, color="red", ci=None)
         #print("Layer", layer, ": p0 = %.4f +- %.4f" % (p0, p0err), ", p1 = %.4f" % p1, ", p0 std. dev. = %.1f" % (p0/p0err))
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_pos_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_pos_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_layer.pdf")
     plt.close(fig)
-    '''
-    '''
+    
+    
     fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
     for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer)]
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
+        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer)].dropna()
+        if not len(hitsl) > 0: continue
         jgrid = sns.jointplot(ax=axs[idx], x=hitsl["ABS_DIST_SEG_WIRE"], y=hitsl["RESIDUES_SEG"], dropna=True, kind="hist")
         jgrid.plot_joint(sns.regplot, ax=axs[idx], order=1, scatter=False, color=".3")
         axs[idx].set_title("Residues vs d [CHAMBER %d, LAYER %d]" % (chamber, layer))
@@ -530,16 +499,16 @@ if 'residues' in args.plot:
         sns.lineplot(x=np.linspace(4, 18), y=p1 + p0 * np.linspace(4, 18), ax=axs[idx], linewidth=2, color="red", ci=None)
         #print("Chamber", chamber, ", Layer", layer, ": p0 = %.4f +- %.4f" % (p0, p0err), ", p1 = %.4f" % (p1), ", p0 std. dev. = %.1f" % (p0/p0err))
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_pos_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_seg_pos_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_seg_pos_chamber_layer.pdf")
     plt.close(fig)
-
-
+    
+    
     fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
     for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer)]
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
+        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer)].dropna()
+        if not len(hitsl) > 0: continue
         jgrid = sns.jointplot(ax=axs[idx], x=hitsl["ABS_DIST_TRACK_WIRE"], y=hitsl["RESIDUES_TRACK"], dropna=True, kind="hist")
         jgrid.plot_joint(sns.regplot, ax=axs[idx], order=1, scatter=False, color=".3")
         axs[idx].set_title("Global residues vs d [CHAMBER %d, LAYER %d]" % (chamber, layer))
@@ -554,16 +523,16 @@ if 'residues' in args.plot:
         sns.lineplot(x=np.linspace(4, 18), y=p1 + p0 * np.linspace(4, 18), ax=axs[idx], linewidth=2, color="red", ci=None)
         #print("Chamber", chamber, ", Layer", layer, ": p0 = %.4f +- %.4f" % (p0, p0err), ", p1 = %.4f" % (p1), ", p0 std. dev. = %.1f" % (p0/p0err))
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_pos_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_pos_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_pos_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_pos_chamber_layer.pdf")
     plt.close(fig)
-    '''
-    '''
+    
+    
     fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
     for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['X_LABEL'] == 1)]
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
+        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['X_LABEL'] == 1)].dropna()
+        if not len(hitsl) > 0: continue
         jgrid = sns.jointplot(ax=axs[idx], x=hitsl["ABS_DIST_TRACK_WIRE"], y=hitsl["RESIDUES_TRACK"], dropna=True, kind="hist")
         jgrid.plot_joint(sns.regplot, ax=axs[idx], order=1, scatter=False, color=".3")
         axs[idx].set_title("Global LEFT residues vs d [CHAMBER %d, LAYER %d]" % (chamber, layer))
@@ -578,15 +547,15 @@ if 'residues' in args.plot:
         sns.lineplot(x=np.linspace(4, 18), y=p1 + p0 * np.linspace(4, 18), ax=axs[idx], linewidth=2, color="red", ci=None)
         #print("Chamber", chamber, ", Layer", layer, ": p0 = %.4f +- %.4f" % (p0, p0err), ", p1 = %.4f" % (p1), ", p0 std. dev. = %.1f" % (p0/p0err))
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_pos_left_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_pos_left_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_pos_left_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_pos_left_chamber_layer.pdf")
     plt.close(fig)
-
+    
     fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
     for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
-        chamber = int(cl % 4)
-        layer = cl // 4 + 1
-        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['X_LABEL'] == 2)]
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
+        hitsl = hits[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['X_LABEL'] == 2)].dropna()
+        if not len(hitsl) > 0: continue
         jgrid = sns.jointplot(ax=axs[idx], x=hitsl["ABS_DIST_TRACK_WIRE"], y=hitsl["RESIDUES_TRACK"], dropna=True, kind="hist")
         jgrid.plot_joint(sns.regplot, ax=axs[idx], order=1, scatter=False, color=".3")
         axs[idx].set_title("Global RIGHT residues vs d [CHAMBER %d, LAYER %d]" % (chamber, layer))
@@ -601,15 +570,14 @@ if 'residues' in args.plot:
         sns.lineplot(x=np.linspace(4, 18), y=p1 + p0 * np.linspace(4, 18), ax=axs[idx], linewidth=2, color="red", ci=None)
         #print("Chamber", chamber, ", Layer", layer, ": p0 = %.4f +- %.4f" % (p0, p0err), ", p1 = %.4f" % (p1), ", p0 std. dev. = %.1f" % (p0/p0err))
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_pos_right_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_pos_right_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_pos_right_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_pos_right_chamber_layer.pdf")
     plt.close(fig)
-    '''
-    '''
-    fig, axs = plt.subplots(nrows=16, ncols=1, figsize=(20, 10))
+    
+    
+    fig, axs = plt.subplots(nrows=16, ncols=1, figsize=(40, 30))
     for cl in range(4*4 -1, 0 -1, -1):
-        layer = int(cl % 4) + 1
-        chamber = cl // 4
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
         if cl==15: axs[-cl-1].set_title("Global residues vs position")
         if cl==0: axs[-cl-1].set_xlabel("$x_{hit}$ (mm)")
         if layer==2 and chamber==1: axs[-cl-1].set_ylabel("|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$| (mm)")
@@ -619,30 +587,14 @@ if 'residues' in args.plot:
         for c in range(-8, +9):
             axs[-cl-1].axvline(c * 42. + (21. if layer % 2 ==1 else 0.), axs[-cl-1].get_ylim()[0], axs[-cl-1].get_ylim()[1], linewidth=2, color='white')
     #fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_x_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/residues_track_x_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_x_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/residues_track_x_chamber_layer.pdf")
     plt.close(fig)
-    '''
-    '''
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(20, 10))
-    axs[0][0].set_title("LEFT residues 100 < X < 200")
-    axs[0][0].hist(hits.loc[(hits['CHAMBER'] == 3) & (hits['LAYER'] == 1) & (hits['X_LABEL'] == 1) & (hits['X'] < 200) & (hits['X'] > 100), 'RESIDUES_TRACK'], bins=np.arange(-4., 4., 0.05))
-    axs[0][1].set_title("RIGHT residues 100 < X < 200")
-    axs[0][1].hist(hits.loc[(hits['CHAMBER'] == 3) & (hits['LAYER'] == 1) & (hits['X_LABEL'] == 2) & (hits['X'] < 200) & (hits['X'] > 100), 'RESIDUES_TRACK'], bins=np.arange(-4., 4., 0.05))
-    axs[1][0].set_title("LEFT residues X < 50")
-    axs[1][0].hist(hits.loc[(hits['CHAMBER'] == 3) & (hits['LAYER'] == 1) & (hits['X_LABEL'] == 1) & (hits['X'] < 50), 'RESIDUES_TRACK'], bins=np.arange(-4., 4., 0.05))
-    axs[1][1].set_title("RIGHT residues X < 50")
-    axs[1][1].hist(hits.loc[(hits['CHAMBER'] == 3) & (hits['LAYER'] == 1) & (hits['X_LABEL'] == 2) & (hits['X'] < 50), 'RESIDUES_TRACK'], bins=np.arange(-4., 4., 0.05))
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/deleteme.png")
-    fig.savefig(args.outputdir + runname + "_plots/deleteme.pdf")
-    plt.close(fig)
-    '''
-    '''
-    fig, axs = plt.subplots(nrows=16, ncols=1, figsize=(20, 10))
+    
+    
+    fig, axs = plt.subplots(nrows=16, ncols=1, figsize=(40, 30))
     for cl in range(4*4 -1, 0 -1, -1):
-        layer = int(cl % 4) + 1
-        chamber = cl // 4
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
         if cl==15: axs[-cl-1].set_title("Distance hit - wire vs position")
         if cl==0: axs[-cl-1].set_xlabel("$x_{hit}$ (mm)")
         if layer==2 and chamber==1: axs[-cl-1].set_ylabel("|$x_{hit}$ - $x_{wire}$| (mm)")
@@ -650,14 +602,13 @@ if 'residues' in args.plot:
         #cbar = fig.colorbar(h[3], ax=axs[-cl-1], pad=0.01)
         #cbar.set_label("Counts")
     #fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/dxwire_track_x_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/dxwire_track_x_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/dxwire_track_x_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/dxwire_track_x_chamber_layer.pdf")
     plt.close(fig)
 
-    fig, axs = plt.subplots(nrows=16, ncols=1, figsize=(20, 10))
+    fig, axs = plt.subplots(nrows=16, ncols=1, figsize=(40, 30))
     for cl in range(4*4 -1, 0 -1, -1):
-        layer = int(cl % 4) + 1
-        chamber = cl // 4
+        chamber, layer = 4 - cl // 4 - 1, int(cl % 4) + 1
         if cl==15: axs[-cl-1].set_title("Distance track - wire vs position")
         if cl==0: axs[-cl-1].set_xlabel("$x_{hit}$ (mm)")
         if layer==2 and chamber==1: axs[-cl-1].set_ylabel("|$x_{track}$ - $x_{wire}$| (mm)")
@@ -665,16 +616,114 @@ if 'residues' in args.plot:
         #cbar = fig.colorbar(h[3], ax=axs[-cl-1], pad=0.01)
         #cbar.set_label("Counts")
     #fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/dfitwire_track_x_chamber_layer.png")
-    fig.savefig(args.outputdir + runname + "_plots/dfitwire_track_x_chamber_layer.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/dfitwire_track_x_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/residues2D/dfitwire_track_x_chamber_layer.pdf")
     plt.close(fig)
-    '''    
+    
+
+
+def plotResolution():
+    if not os.path.exists(args.outputdir + runname + "_plots/resolution/"): os.makedirs(args.outputdir + runname + "_plots/resolution/")
+    
+    segments = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "segments*.csv"))))
+    segments['M_RAD'] = np.arctan(segments['M'])
+    segments['M_RAD'] = np.where(segments['M_RAD'] < 0, segments['M_RAD'] + math.pi/2., segments['M_RAD'] - math.pi/2.)
+    segments['M_DEG'] = np.degrees(segments['M_RAD'])
+    segments['X0'] = - segments['Q'] / segments['M']
+    
+    # Calculate the difference between the angles of the segments in the same orbit, and report it to the hits df for further filtering
+    angle_df = segments[(segments['VIEW'] == '0') & (segments['CHAMBER'].isin([str(x) for x in config.SL_VIEW[config.PHI_VIEW]]))].copy()
+    angle_df['DELTA_ANGLE'] = angle_df.groupby('ORBIT')['M_DEG'].transform(np.ptp)
+    angle_dict = angle_df[['ORBIT', 'DELTA_ANGLE']].drop_duplicates().set_index('ORBIT').T.to_dict('records')[0]    
+    hits['DELTA_ANGLE'] = hits['ORBIT'].map(angle_dict)
+    
+    # Calculate the difference between the x0 position interpolated from the track, and the one in the test layer, for further filtering
+    pos_df = segments[(segments['VIEW'] == config.PHI_VIEW.upper()) & ((segments['CHAMBER'] == ",".join([str(x) for x in config.SL_AUX])) | (segments['CHAMBER'] == str(config.SL_TEST)))].copy()
+    pos_df['DELTA_X0'] = pos_df.groupby('ORBIT')['X0'].transform(np.ptp)    
+    pos_dict = pos_df[['ORBIT', 'DELTA_X0']].drop_duplicates().set_index('ORBIT').T.to_dict('records')[0]
+    hits['DELTA_X0'] = hits['ORBIT'].map(pos_dict)
+    
+    # Associate the track chi2 to each hit
+    chi2_df = segments[(segments['VIEW'] == config.PHI_VIEW.upper()) & (segments['CHAMBER'] == ",".join([str(x) for x in config.SL_AUX]))].copy()
+    chi2_dict = chi2_df[['ORBIT', 'CHI2']].drop_duplicates().set_index('ORBIT').T.to_dict('records')[0]
+    hits['TRACK_CHI2'] = hits['ORBIT'].map(chi2_dict)
+    
+    
+    nhits = {}
+    for num_hits in [0, 3, 4]: nhits[num_hits] = hits.loc[(hits['NHITS_SEG'] == num_hits)] if num_hits != 0 else hits
+    
+    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(30, 10))
+    for num_hits in [0, 3, 4]: plotHist(axs[0], data=nhits[num_hits]['DELTA_ANGLE'].drop_duplicates(), name="$\Delta \phi$ between the segments", title="$\Delta \phi$", unit="deg", bins=np.arange(0., 10., 0.05), label="""{}""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
+    for num_hits in [0, 3, 4]: plotHist(axs[1], data=nhits[num_hits]['DELTA_X0'].drop_duplicates(), name="$\Delta x_0$ between the segments", title="$\Delta x_0$", unit="mm", bins=np.arange(0., 50., 0.5), label="""{}""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
+    for num_hits in [0, 3, 4]: plotHist(axs[2], data=nhits[num_hits]['TRACK_CHI2'].drop_duplicates(), name="$\chi^2$ / n.d.f.", title="$\chi^2$ / n.d.f.", unit="", bins=np.arange(0., 5., 0.1), label="""{}""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/resolution/deltas.png")
+    fig.savefig(args.outputdir + runname + "_plots/resolution/deltas.pdf")
+    plt.close(fig)
+    
+    fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(15, 10))
+    for num_hits in [0, 3, 4]: plotHist(axs, data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] ==config.SL_TEST) & (nhits[num_hits]['DELTA_ANGLE'] < 1.) & (nhits[num_hits]['DELTA_X0'] < 1.) & (nhits[num_hits]['TRACK_CHI2'] < 1.), 'RESIDUES_TRACK'], name="Global residues [SL %d]" % config.SL_TEST, title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/resolution/resolution.png")
+    fig.savefig(args.outputdir + runname + "_plots/resolution/resolution.pdf")
+    plt.close(fig)
+
+
+# Tappini
+def plotTappini():
+    if not os.path.exists(args.outputdir + runname + "_plots/tappini/"): os.makedirs(args.outputdir + runname + "_plots/tappini/")
+    
+    wires = {
+        0 : [1, 2],
+        1 : [3, 4, 5, 6],
+        2 : [7, 8, 9, 10],
+        3 : [11, 12, 13, 14],
+        4 : [15, 16],
+    }
+    chamber = config.SL_TEST
+    
+    # Tappini check
+    fig, axs = plt.subplots(nrows=4, ncols=5, figsize=(40, 30))
+    for layer in range(1, 4+1):
+        for group in range(0, 5):
+    #for idx, cl in zip([(i, j) for i in range(5) for j in range(4)], range(0, 4*5)):
+    #    chamber, layer, group = config.SL_TEST, 4 - cl // 4 - 1, int(cl % 4) + 1
+            plotHist(axs[-layer][group], data=hits.loc[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['WIRE'].isin(wires[group])), 'RESIDUES_TRACK'], name="Global residues [LAYER %d, TAPPINO %d]" % (layer, group), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""3/4 + 4/4,\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/tappini/residues_track_tappino.png")
+    fig.savefig(args.outputdir + runname + "_plots/tappini/residues_track_tappino.pdf")
+    plt.close(fig)
+    
+    # Tappini check LEFT
+    fig, axs = plt.subplots(nrows=4, ncols=5, figsize=(40, 30))
+    for layer in range(1, 4+1):
+        for group in range(0, 5):
+            plotHist(axs[-layer][group], data=hits.loc[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['WIRE'].isin(wires[group]) & (hits['X_LABEL'] == 1)), 'RESIDUES_TRACK'], name="Global residues LEFT [LAYER %d, TAPPINO %d]" % (layer, group), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""3/4 + 4/4,\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/tappini/residues_track_left_tappino.png")
+    fig.savefig(args.outputdir + runname + "_plots/tappini/residues_track_left_tappino.pdf")
+    plt.close(fig)
+    
+    # Tappini check RIGHT
+    fig, axs = plt.subplots(nrows=4, ncols=5, figsize=(40, 30))
+    for layer in range(1, 4+1):
+        for group in range(0, 5):
+            plotHist(axs[-layer][group], data=hits.loc[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer) & (hits['WIRE'].isin(wires[group]) & (hits['X_LABEL'] == 2)), 'RESIDUES_TRACK'], name="Global residues RIGHT [LAYER %d, TAPPINO %d]" % (layer, group), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""3/4 + 4/4,\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/tappini/residues_track_right_tappino.png")
+    fig.savefig(args.outputdir + runname + "_plots/tappini/residues_track_right_tappino.pdf")
+    plt.close(fig)
+
 
 # Missing hits
-if 'missinghits' in args.plot:
+def plotMissinghits():
+    
+    if not os.path.exists(args.outputdir + runname + "_plots/missinghits/"): os.makedirs(args.outputdir + runname + "_plots/missinghits/")
+    
+    missinghits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "missinghits*.csv"))))
     nmax = missinghits.groupby(['CHAMBER', 'WIRE', 'LAYER']).size().max()
 
-    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
     for chamber in range(4):
         axs[-chamber-1].set_title("Missing hit position [SL %d]" % chamber)
         axs[-chamber-1].set_xlabel("X position (mm)")
@@ -683,11 +732,11 @@ if 'missinghits' in args.plot:
         cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
         cbar.set_label("Counts")
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/missinghits_position.png")
-    fig.savefig(args.outputdir + runname + "_plots/missinghits_position.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_position.png")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_position.pdf")
     plt.close(fig)
 
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 20))
     for chamber in range(4):
         for layer in range(4):
             mis = missinghits[((missinghits['CHAMBER'] == chamber) & (missinghits['LAYER'] == layer+1))]
@@ -698,11 +747,11 @@ if 'missinghits' in args.plot:
             axs[-chamber-1][layer].set_xlim(0, 17)
             axs[-chamber-1][layer].bar(mis['WIRE'].value_counts().index, mis['WIRE'].value_counts().values)
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/missinghits_wire.png")
-    fig.savefig(args.outputdir + runname + "_plots/missinghits_wire.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_wire.png")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_wire.pdf")
     plt.close(fig)
 
-    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
     for chamber in range(4):
         axs[-chamber-1].set_title("Missing hits [SL %d]" % (chamber))
         axs[-chamber-1].set_xlabel("Wire number")
@@ -713,12 +762,12 @@ if 'missinghits' in args.plot:
         cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
         cbar.set_label("Counts")
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/missinghits_cell.png")
-    fig.savefig(args.outputdir + runname + "_plots/missinghits_cell.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_cell.png")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_cell.pdf")
     plt.close(fig)
 
     nmax = hits.groupby(['CHAMBER', 'WIRE', 'LAYER']).size().max()
-    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
     for chamber in range(4):
         axs[-chamber-1].set_title("Position of hits included in the fit [SL %d]" % chamber)
         axs[-chamber-1].set_xlabel("X position (mm)")
@@ -727,8 +776,8 @@ if 'missinghits' in args.plot:
         cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
         cbar.set_label("Counts")
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/segmenthits_position.png")
-    fig.savefig(args.outputdir + runname + "_plots/segmenthits_position.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/segmenthits_position.png")
+    fig.savefig(args.outputdir + runname + "_plots/missinghits/segmenthits_position.pdf")
     plt.close(fig)
     '''
     # Wire efficiency
@@ -768,12 +817,13 @@ if 'missinghits' in args.plot:
 
 
 # Occupancy
-if 'occupancy' in args.plot:
+def plotOccupancy():
     if not os.path.exists(args.outputdir + runname + "_plots/occupancy/"): os.makedirs(args.outputdir + runname + "_plots/occupancy/")
     
     occupancy = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "occupancy*.csv"))))
+    occupancy['RATE'] = occupancy['COUNTS'] / runtime
     
-    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
     for chamber in range(4):
         axs[-chamber-1].set_title("Occupancy [SL %d]" % (chamber))
         axs[-chamber-1].set_xlabel("Wire number")
@@ -788,7 +838,7 @@ if 'occupancy' in args.plot:
     fig.savefig(args.outputdir + runname + "_plots/occupancy/counts.pdf")
     plt.close(fig)
 
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
     for chamber in range(4):
         for layer in range(4):
             occ = occupancy[((occupancy['SL'] == chamber) & (occupancy['LAYER'] == layer+1) & (occupancy['WIRE_NUM'] <= 16))]
@@ -803,7 +853,7 @@ if 'occupancy' in args.plot:
     plt.close(fig)
 
 
-    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(20, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
     for chamber in range(4):
         axs[-chamber-1].set_title("Rate [SL %d]" % (chamber))
         axs[-chamber-1].set_xlabel("Wire number")
@@ -818,7 +868,7 @@ if 'occupancy' in args.plot:
     fig.savefig(args.outputdir + runname + "_plots/occupancy/rate.pdf")
     plt.close(fig)
 
-    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
     for chamber in range(4):
         for layer in range(4):
             occ = occupancy[((occupancy['SL'] == chamber) & (occupancy['LAYER'] == layer+1) & (occupancy['WIRE_NUM'] <= 16))]
@@ -833,7 +883,94 @@ if 'occupancy' in args.plot:
     plt.close(fig)
     
 
-if 'alignment' in args.plot:
+
+# Parameters
+def plotParameters():
+    if not os.path.exists(args.outputdir + runname + "_plots/parameters/"): os.makedirs(args.outputdir + runname + "_plots/parameters/")
+    
+    segments = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "segments*.csv"))))
+
+    if args.verbose >= 1: print("Read %d lines from segments.csv" % (len(segments), ))
+    if args.verbose >= 2:
+        print(segments.head(50))
+        print(segments.tail(50))
+
+    # Disentangle tracks and segments
+    segments['ANGLE_RAD'] = np.arctan(segments['M'])
+    segments['ANGLE_RAD'] = np.where(segments['ANGLE_RAD'] < 0, segments['ANGLE_RAD'] + math.pi/2., segments['ANGLE_RAD'] - math.pi/2.)
+    #segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] = segments.loc[segments['ANGLE_RAD'] < 0., 'ANGLE_RAD'] + np.pi # shift angle by pi
+    segments['ANGLE_DEG'] = np.degrees(segments['ANGLE_RAD']) #- 90.
+    segments['X0'] = - segments['Q'] / segments['M']
+
+    tracks = segments.loc[segments['VIEW'] != '0']
+    segments = segments.loc[segments['VIEW'] == '0']
+
+    if args.verbose >= 1: print("Numer of global tracks:", len(tracks[tracks['CHAMBER'].str.len() > 1]))
+
+    segments['XL1'] = -(-19.5 + segments['Q']) / segments['M']
+    segments['XL2'] = -(- 6.5 + segments['Q']) / segments['M']
+    segments['XL3'] = -(+ 6.5 + segments['Q']) / segments['M']
+    segments['XL4'] = -(+19.5 + segments['Q']) / segments['M']
+    
+    # Chi2
+    fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(30, 20))
+    for idx, chamber in zip(iax, isl):
+        axs[idx].set_title("Segments $\chi^2$ [SL %d]" % chamber)
+        axs[idx].set_xlabel("$\chi^2$/n.d.f.")
+        axs[idx].set_ylabel("Counts")
+        axs[idx].hist(segments.loc[segments['CHAMBER'].astype('int32') == chamber, 'CHI2'], bins=chi2bins)
+        axs[idx].set_xscale("log")
+    for w, view in enumerate(['XZ', 'YZ']):
+        axs[(2, w)].set_title("Track $\chi^2$ [%s]" % view)
+        axs[(2, w)].set_xlabel("$\chi^2$/n.d.f.")
+        axs[(2, w)].set_ylabel("Counts")
+        axs[(2, w)].hist(tracks.loc[(tracks['VIEW'] == view), 'CHI2'], bins=chi2bins)
+        axs[(2, w)].set_xscale("log")
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/parameters/chi2.png")
+    fig.savefig(args.outputdir + runname + "_plots/parameters/chi2.pdf")
+    plt.close(fig)
+
+
+    # Parameters
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
+    for i, p in enumerate(['ANGLE_DEG', 'Q', 'X0', 'NHITS']):
+        for chamber in range(4):
+            axs[i][chamber].set_title("Segments %s [SL %d]" % (p, chamber))
+            axs[i][chamber].set_xlabel(parlabel[p])
+            axs[i][chamber].hist(segments.loc[segments['CHAMBER'].astype('int32') == chamber, p], bins=parbins[p])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_par.png")
+    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_par.pdf")
+    plt.close(fig)
+
+    fig, axs = plt.subplots(nrows=4, ncols=2, figsize=(40, 30))
+    for w, view in enumerate(['XZ', 'YZ']):
+        for i, p in enumerate(['ANGLE_DEG', 'Q', 'X0', 'NHITS']):
+            axs[i][w].set_title("Tracks %s [%s]" % (p, view))
+            axs[i][w].set_xlabel(parlabel[p])
+            axs[i][w].hist(tracks[p], bins=parbins[p])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/parameters/tracks_par.png")
+    fig.savefig(args.outputdir + runname + "_plots/parameters/tracks_par.pdf")
+    plt.close(fig)
+    
+    # X0
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
+    for idx, cl in zip([(i, j) for i in range(4) for j in range(4)], range(0, 4*4)):
+        chamber = int(cl % 4)
+        layer = cl // 4 + 1
+        axs[idx].set_title("Segment $x_{l}$ [CHAMBER %d, LAYER %d]" % (chamber, layer))
+        axs[idx].set_xlabel(parlabel[p])
+        axs[idx].hist(segments.loc[(segments['CHAMBER'] == str(chamber)), 'XL%d' % layer].dropna(), bins=parbins['X0'])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_x0_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/parameters/segment_x0_chamber_layer.pdf")
+    plt.close(fig)
+
+
+
+def plotAlignment():
     if not os.path.exists(args.outputdir + runname + "_plots/alignment/"): os.makedirs(args.outputdir + runname + "_plots/alignment/")
     '''
     #Zchambers = {'02' : 816.2, '03' : 1599.7, '23' : 783.5}
@@ -858,68 +995,61 @@ if 'alignment' in args.plot:
     if args.verbose >= 1: print("Segment extrapolation completed.")
     '''
     ex = pd.read_csv(args.inputdir + "extrapolation.csv")
+    if len(ex) == 0:
+        print("Extrapolation dataframe is empty. Please run the matching.py macro first.")
+        exit()
+        
+    #nex = {}
+    #for num_hits in [0, 3, 4]: nex[num_hits] = ex.loc[(hits['n_hits_local'] == num_hits)] if num_hits != 0 else ex
     
     # Delta angles
-    fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(40, 20))
     for i, sl in enumerate(list(itertools.combinations(config.SL_VIEW[config.PHI_VIEW], 2))):
-        #segs = segments[((segments['VIEW'] == '0') & (segments['NHITS'] >= 4) & ((segments['CHAMBER'] == sl[0]) | (segments['CHAMBER'] == sl[1])))]
-        #diff = (segs.groupby(['ORBIT'])['ANGLE_DEG']).diff().to_numpy()
-        #diff = diff[np.isfinite(diff)]
-        axs[0][i].set_title("Angle difference [SL %d vs SL %d]" % (sl[0], sl[1]))
-        axs[0][i].set_xlabel("Angle difference [SL %d - SL %d] (deg)" % (sl[0], sl[1]))
-        ybins, xbins, patches = axs[0][i].hist(ex['deltaA_%d%d' % (sl[0], sl[1])], bins=np.arange(-10., 10., 0.5))
-        fitGaus(axs[0][i], ybins, xbins, patches)
-        # 2D
-        axs[1][i].set_title("Angle difference [SL %d vs SL %d]" % (sl[0], sl[1]))
-        axs[1][i].set_ylabel("Angle [SL %d] (deg)" % (sl[0]))
-        axs[1][i].set_xlabel("Angle difference [SL %d - SL %d] (deg)" % (sl[0], sl[1]))
-        h = axs[1][i].hist2d(ex['deltaA_%d%d' % (sl[0], sl[1])], ex['ANGLE_DEG_%d' % (sl[0])], bins=[40, 50], range=[[-10., 10.], [-5., 5.]],)
+        for num_hits in [0]:
+            plotHist(axs[0][i], data=ex['deltaA_%d%d' % (sl[0], sl[1])], name="Angle difference [SL %d vs SL %d]" % (sl[0], sl[1]), title="Angle difference [SL %d - SL %d]" % (sl[0], sl[1]), unit="deg", bins=np.arange(-10., 10., 0.5), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+            # 2D
+            axs[1][i].set_title("Angle difference [SL %d vs SL %d]" % (sl[0], sl[1]))
+            axs[1][i].set_ylabel("Angle [SL %d] (deg)" % (sl[0]))
+            axs[1][i].set_xlabel("Angle difference [SL %d - SL %d] (deg)" % (sl[0], sl[1]))
+            h = axs[1][i].hist2d(ex['deltaA_%d%d' % (sl[0], sl[1])], ex['ANGLE_DEG_%d' % (sl[0])], bins=[40, 50], range=[[-10., 10.], [-5., 5.]],)
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_angles.png")
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_angles.pdf")
     plt.close(fig)
 
     # Delta positions (extrapolated)
-    fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=2, ncols=3, figsize=(40, 20))
     for i, sl in enumerate(list(itertools.combinations(config.SL_VIEW[config.PHI_VIEW], 2))):
-        axs[0][i].set_title("Position difference [SL %d extrapolated from SL %d]" % (sl[1], sl[0]))
-        axs[0][i].set_xlabel("Position difference [extrapolated from SL %d - SL %d] (mm)" % (sl[0], sl[1]))
-        ybins, xbins, patches = axs[0][i].hist(ex['deltaX_%d%d' % (sl[0], sl[1])], bins=np.arange(-100., 100., 5.))
-        fitGaus(axs[0][i], ybins, xbins, patches)
-        axs[1][i].set_title("Position difference [SL %d extrapolated from SL %d]" % (sl[0], sl[1]))
-        axs[1][i].set_xlabel("Position difference [extrapolated from SL %d - SL %d] (mm)" % (sl[1], sl[0]))
-        ybins, xbins, patches = axs[1][i].hist(ex['deltaX_%d%d' % (sl[1], sl[0])], bins=np.arange(-100., 100., 5.))
-        fitGaus(axs[1][i], ybins, xbins, patches)
+        for num_hits in [0]:
+            plotHist(axs[0][i], data=ex['deltaX_%d%d' % (sl[0], sl[1])], name="Position difference [SL %d extrapolated from SL %d]" % (sl[1], sl[0]), title="Position difference [extrapolated from SL %d - SL %d]" % (sl[0], sl[1]), unit="mm", bins=np.arange(-50., 50., 1.), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+            plotHist(axs[1][i], data=ex['deltaX_%d%d' % (sl[1], sl[0])], name="Position difference [SL %d extrapolated from SL %d]" % (sl[0], sl[1]), title="Position difference [extrapolated from SL %d - SL %d]" % (sl[1], sl[0]), unit="mm", bins=np.arange(-50., 50., 1.), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_positions.png")
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_positions.pdf")
     plt.close(fig)
 
-    fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(15, 10))
+    fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(40, 30))
     for i, p in enumerate(['ANGLE_DEG', 'Q', 'X0']):
         for j, chamber in enumerate(config.SL_VIEW[config.PHI_VIEW]):
-            axs[i][chamber].set_title("Segments %s [SL %d]" % (p, chamber))
-            axs[i][chamber].set_xlabel(parlabel[p])
-            axs[i][chamber].hist(ex['%s_%d' % (p, chamber)], bins=parbins[p])
+            for num_hits in [0]:
+                plotHist(axs[i][chamber], data=ex['%s_%d' % (p, chamber)], name="Segments %s [SL %d]" % (p, chamber), title=parlabel[p], unit=parunits[p], bins=parbins[p], label="3/4 + 4/4", linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.png")
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.pdf")
     plt.close(fig)
 
 
-if 'trigger' in args.plot:
-    
+def plotTrigger():
     if not os.path.exists(args.outputdir + runname + "_plots/trigger/"): os.makedirs(args.outputdir + runname + "_plots/trigger/")
     
     mt = pd.read_csv(args.inputdir + "matching.csv")
     nA = pd.read_csv(args.inputdir + "denominator.csv")
     nT = pd.read_csv(args.inputdir + "numerator.csv")
+    
+    nmt = {}
+    for num_hits in [0, 3, 4]: nmt[num_hits] = mt.loc[(mt['n_hits_local'] == num_hits)] if num_hits != 0 else mt
 
-    for num_hits in [0, 3, 4]:
-        hA, hT = nA[nA['n_hits_local'] == num_hits] if num_hits else nA, nT[nT['n_hits_local'] == num_hits] if num_hits else nT
-        print("Trigger efficiency (%s hits): %d / %d = %.3f +- %.3f" % (str(num_hits) if num_hits else "all", len(hT), len(hA), len(hT)/len(hA), len(hT)/len(hA)*math.sqrt(1./len(hT) + 1./len(hA))))
-        #print("Number of hits %s / 4 = %d" % (str(num_hits), len(hA))
-
+    '''
     for p in trigger_plots.keys():
 
         plt.figure(figsize=(8, 6))
@@ -969,22 +1099,26 @@ if 'trigger' in args.plot:
         plt.tight_layout()
         plt.savefig(args.outputdir + runname + "_plots/trigger/" + p + "_all.pdf")
         plt.savefig(args.outputdir + runname + "_plots/trigger/" + p + "_all.png")
-
+    '''
 
     plt.figure(figsize=(8, 6))
-    for num_hits in [4]:
-        num, bin_borders = np.histogram(nT.loc[nT['n_hits_local'] == num_hits, 'radYZ_global'], bins=effRange)
-        den, bin_borders = np.histogram(nA.loc[nA['n_hits_local'] == num_hits, 'radYZ_global'], bins=effRange)
+    for num_hits in [0, 3, 4]:
+        tnT = nT.loc[nT['n_hits_local'] == num_hits] if num_hits != 0 else nT
+        tnA = nA.loc[nA['n_hits_local'] == num_hits] if num_hits != 0 else nA
+        eff, sigma_eff = len(tnT)/len(tnA), len(tnT)/len(tnA)*math.sqrt(1./len(tnT) + 1./len(tnA))
+        print("Trigger efficiency (%s hits): %d / %d = %.3f +- %.3f" % (str(num_hits) if num_hits else "all", len(tnT), len(tnA), eff, sigma_eff))
+        num, bin_borders = np.histogram(tnT['radYZ_global'], bins=effRange)
+        den, bin_borders = np.histogram(tnA['radYZ_global'], bins=effRange)
         den[den <= 0.] = 1
-        eff = np.divide(num, den)
+        effic = np.divide(num, den)
         num[num <= 0.] = 1
-        errDown = eff * np.sqrt(1./num + 1./den)
-        errUp = np.where(eff + errDown < 1., eff + errDown, 1.) - eff
+        errDown = effic * np.sqrt(1./num + 1./den)
+        errUp = np.where(effic + errDown < 1., effic + errDown, 1.) - effic
         bin_centers = bin_borders[:-1] + np.diff(bin_borders) / 2
-        label_string = """{}/4,\neff.=${:.3f}\pm{:.3f}$""".format(num_hits, np.sum(num)/np.sum(den), np.sum(num)/np.sum(den) * math.sqrt(1./np.sum(num) + 1./np.sum(den)))
-        line = plt.errorbar(bin_centers, eff, yerr=[errDown, errUp], fmt=markers[num_hits], color=colors[num_hits], alpha=1, markersize=6, zorder=1, label=label_string)[0]
+        label_string = """{},\neff.=${:.3f}\pm{:.3f}$""".format(("%d/4" % num_hits if num_hits else "3/4 + 4/4"), eff, sigma_eff)
+        line = plt.errorbar(bin_centers, effic, yerr=[errDown, errUp], fmt=markers[num_hits], color=colors[num_hits], alpha=1, markersize=6, zorder=1, label=label_string)[0]
         line.set_clip_on(False)
-    plt.ylabel("Efficiency", size=20)
+    plt.ylabel("Trigger efficiency", size=20)
     plt.xlabel("$\\phi$ [rad]", size=20)
     plt.legend(fontsize=15, frameon=True)
     #plt.ylim(0.8, 1.05)
@@ -993,67 +1127,56 @@ if 'trigger' in args.plot:
     plt.savefig(args.outputdir + runname + "_plots/trigger/efficiency.pdf")
     plt.savefig(args.outputdir + runname + "_plots/trigger/efficiency.png")
 
-    '''
+    
     # Difference between local and global fit
-    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
-    axs[0].set_title("Angle")
-    axs[0].set_xlabel("$\\alpha_{local} - \\alpha_{global}$ (mrad)")
-    ybins, xbins, patches = axs[0].hist(df['deltaM_global_local']*1.e3, bins=np.arange(-100., 100., 2.))
-    fitGaus(axs[0], ybins, xbins, patches)
-    axs[1].set_title("Position")
-    axs[1].set_xlabel("$x^0_{local} - x^0_{global}$ (mm)")
-    ybins, xbins, patches = axs[1].hist(df['deltaQ_global_local'], bins=np.arange(-25., 25., 0.5))
-    fitGaus(axs[1], ybins, xbins, patches)
+    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(30, 10))
+    for num_hits in [0, 3, 4]:
+        plotHist(axs[0], data=nmt[num_hits]['deltaM_global_local']*1.e3, name="Angle", title="$\\alpha_{local} - \\alpha_{global}$", unit="mrad", bins=np.arange(-100., 100., 1.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+        plotHist(axs[1], data=nmt[num_hits]['deltaQ_global_local'], name="Position", title="$x^0_{local} - x^0_{global}$", unit="mm", bins=np.arange(-5., 5., 0.1), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     axs[2].set_title("Angle vs position")
     axs[2].set_xlabel("$\\alpha_{local} - \\alpha_{global}$ (mrad)")
     axs[2].set_ylabel("$x^0_{local} - x^0_{global}$ (mm)")
-    axs[2].hist2d(x=df['deltaM_global_local']*1.e3, y=df['deltaQ_global_local'], bins=[np.arange(-50., 50., 2.), np.arange(-10., 10., 0.5)])
-    #fitGaus(axs[2], ybins, xbins, patches)
-
+    axs[2].hist2d(x=mt['deltaM_global_local']*1.e3, y=mt['deltaQ_global_local'], bins=[np.arange(-50., 50., 2.), np.arange(-2., 2., 0.1)])
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_trigger/global_vs_local.png")
-    fig.savefig(args.outputdir + runname + "_trigger/global_vs_local.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/trigger/global_vs_local.png")
+    fig.savefig(args.outputdir + runname + "_plots/trigger/global_vs_local.pdf")
     plt.close(fig)
 
     # Difference between trigger and local fit
-    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
-    axs[0].set_title("Angle")
-    axs[0].set_xlabel("$\\alpha_{trigger} - \\alpha_{local}$ (mrad)")
-    ybins, xbins, patches = axs[0].hist(df['deltaM_local_trigger']*1.e3, bins=np.arange(-100., 100., 2.))
-    fitGaus(axs[0], ybins, xbins, patches)
-    axs[1].set_title("Position")
-    axs[1].set_xlabel("$x^0_{trigger} - x^0_{local}$ ($\mu$m)")
-    ybins, xbins, patches = axs[1].hist(df['deltaQ_local_trigger']*1.e3, bins=np.arange(-250., 250., 5.))
-    fitGaus(axs[1], ybins, xbins, patches)
-    axs[2].set_title("Time")
-    axs[2].set_xlabel("$t^0_{scintillator} - t^0_{trigger}$ (ns)")
-    ybins, xbins, patches = axs[2].hist(df['deltaT_local_trigger'], bins=25, range=(-25./30.*50, 25./30.*50))
-    fitGaus(axs[2], ybins, xbins, patches)
+    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(30, 10))
+    for num_hits in [0, 3, 4]:
+        plotHist(axs[0], data=nmt[num_hits]['deltaM_local_trigger']*1.e3, name="Angle", title="$\\alpha_{trigger} - \\alpha_{local}$", unit="mrad", bins=np.arange(-50., 50., 1.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+        plotHist(axs[1], data=nmt[num_hits]['deltaQ_local_trigger'], name="Position", title="$x^0_{trigger} - x^0_{local}$", unit="mm", bins=np.arange(-2., 2., 0.01), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+        plotHist(axs[2], data=nmt[num_hits]['deltaT_local_trigger'], name="Time", title="$t^0_{scintillator} - t^0_{trigger}$", unit="ns", bins=np.arange(-25./30.*50, 50./30.*50, 2./30.*50.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_trigger/trigger_vs_local.png")
-    fig.savefig(args.outputdir + runname + "_trigger/trigger_vs_local.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/trigger/trigger_vs_local.png")
+    fig.savefig(args.outputdir + runname + "_plots/trigger/trigger_vs_local.pdf")
     plt.close(fig)
 
     # Difference between trigger and global fit
-    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
-    axs[0].set_title("Angle")
-    axs[0].set_xlabel("$\\alpha_{trigger} - \\alpha_{global}$ (mrad)")
-    ybins, xbins, patches = axs[0].hist(df['deltaM_global_trigger']*1.e3, bins=np.arange(-100., 100., 2.))
-    fitGaus(axs[0], ybins, xbins, patches)
-    axs[1].set_title("Position")
-    axs[1].set_xlabel("$x^0_{trigger} - x^0_{global}$ (mm)")
-    ybins, xbins, patches = axs[1].hist(df['deltaQ_global_trigger'], bins=np.arange(-25., 25., 0.5))
-    fitGaus(axs[1], ybins, xbins, patches)
-    axs[2].set_title("Time")
-    axs[2].set_xlabel("$t^0_{scintillator} - t^0_{trigger}$ (ns)")
-    ybins, xbins, patches = axs[2].hist(df['deltaT_global_trigger'], bins=25, range=(-25./30.*50, 25./30.*50))
-    fitGaus(axs[2], ybins, xbins, patches)
+    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(30, 10))
+    for num_hits in [0, 3, 4]:
+        plotHist(axs[0], data=nmt[num_hits]['deltaM_global_trigger']*1.e3, name="Angle", title="$\\alpha_{trigger} - \\alpha_{global}$", unit="mrad", bins=np.arange(-100., 100., 1.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+        plotHist(axs[1], data=nmt[num_hits]['deltaQ_global_trigger'], name="Position", title="$x^0_{trigger} - x^0_{global}$", unit="mm", bins=np.arange(-5., 5., 0.1), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+        plotHist(axs[2], data=nmt[num_hits]['deltaT_global_trigger'], name="Time", title="$t^0_{scintillator} - t^0_{trigger}$", unit="ns", bins=np.arange(-25./30.*50, 50./30.*50, 2./30.*50.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_trigger/trigger_vs_global.png")
-    fig.savefig(args.outputdir + runname + "_trigger/trigger_vs_global.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/trigger/trigger_vs_global.png")
+    fig.savefig(args.outputdir + runname + "_plots/trigger/trigger_vs_global.pdf")
     plt.close(fig)
-    '''
     
+    
+
+
+if 'boxes' in args.plot or args.all: plotBoxes()
+if 'residues' in args.plot or args.all: plotResidues()
+if 'res2D' in args.plot or args.all: plotResidues2D()
+if 'resolution' in args.plot or args.all: plotResolution()
+if 'tappini' in args.plot or args.all: plotTappini()
+if 'missinghits' in args.plot or args.all: plotMissinghits()
+if 'occupancy' in args.plot or args.all: plotOccupancy()
+if 'parameters' in args.plot or args.all: plotParameters()
+if 'alignment' in args.plot or args.all: plotAlignment()
+if 'trigger' in args.plot or args.all: plotTrigger()
 
 
 if args.verbose >= 1: print("Done.")

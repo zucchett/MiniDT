@@ -143,6 +143,8 @@ def recoSegments(hitlist):
     iorbit, isl, itime = hitlist['ORBIT'].values[0], hitlist['CHAMBER'].values[0], hitlist['T0'].values[0]
 
     nhits = len(hitlist)
+    hitlist['NHITS_SEG'] = nhits
+    
     if nhits < config.NHITS_LOCAL_MIN or nhits > config.NHITS_LOCAL_MAX:
         if args.verbose >= 2: print("Skipping       event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
         return hitlist
@@ -201,7 +203,6 @@ def recoTracks(hitlist):
     iEvSl += 1
     if args.verbose == 1 and iEvSl % 100 == 0: print("Running track reconstruction [%.2f %%]" % (100.*iEvSl/nEvSl), end='\r')
 
-    global segments
     iorbit, itime = hitlist['ORBIT'].values[0], hitlist['T0'].values[0]
 
     # Loop on the views (xz, yz)
@@ -211,13 +212,14 @@ def recoTracks(hitlist):
         for sl_idx in sls:
             viewhits = hitlist[(hitlist['CHAMBER'].isin(sl_idx)) & (hitlist['X'].notnull())]
             nhits = len(viewhits)
+            hitlist['NHITS_TRACK'] = nhits
             if nhits < 3: continue #*len(sl_idx)
             posxy, posz = viewhits[view[0].upper() + '_GLOB'], viewhits[view[1].upper() + '_GLOB']
             m, q, chi2 = fitFast(posxy.to_numpy(), posz.to_numpy())
             if chi2 < config.FIT_CHI2NDF_MAX and abs(m) > config.FIT_M_MIN:
                 segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [','.join([str(x) for x in sl_idx])], 'NHITS' : [nhits], 'M' : [m], 'SIGMAM' : [np.nan], 'Q' : [q], 'SIGMAQ' : [np.nan], 'CHI2' : [chi2], 'HIT_INDEX': [list(viewhits.index)], 'T0' : [itime]}), ignore_index=True)
                 if len(sl_idx) > 1: # Avoid overwriting track residues in case only one SL is fitted
-                    sl_idxr = sl_idx + ([2] if view == 'yz' and not 2 in sl_idx else [])
+                    sl_idxr = config.SL_VIEW[view]#sl_idx + ([2] if view == 'yz' and not 2 in sl_idx else [])
                     for isl in sl_idxr: #FIXME residues also for SL 2
                         for ilayer in range(1, 4+1):
                             mask = (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer)
@@ -277,9 +279,10 @@ for i, filename in enumerate(args.filenames):
         print("File format not recognized, skipping file...")
 
 # Determine length of the run
-runtime = (df['ORBIT_CNT'].max() - df['ORBIT_CNT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
+runTime = (df['ORBIT_CNT'].max() - df['ORBIT_CNT'].min()) * DURATION['orbit'] * 1.e-9 # Approximate acquisition time in seconds
 
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Read %d lines from %d file(s)." % (len(df), len(args.filenames)), "Duration of the run:\t%d s" % runtime)
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Read %d lines from %d file(s)." % (len(df), len(args.filenames)), "Duration of the run:\t%d s" % runTime)
+
 
 df['TDC_MEAS'] = df['TDC_MEAS'] - 1 # Correct TDC as the input is in the [1, 30] range
 # Swap channels
@@ -312,7 +315,7 @@ triggers[['M', 'Q']] = triggers.groupby('ORBIT_CNT')[['M', 'Q']].transform(np.ma
 triggers = triggers.drop_duplicates(subset=['ORBIT_CNT', 'M', 'Q'], keep='first')
 # Proper trigger dataframe formatting
 triggers = triggers.rename(columns={'ORBIT_CNT' : 'ORBIT'})
-triggers[['VIEW', 'CHAMBER', 'NHITS', 'SIGMAM', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0']] = ['YZ', '2', np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
+triggers[['VIEW', 'CHAMBER', 'NHITS', 'SIGMAM', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0']] = [config.PHI_VIEW.upper(), str(config.SL_TEST), np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
 triggers = triggers[['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0']]
 # Adopt common parameters notation
 triggers['M'] = 1. / triggers['M']
@@ -341,7 +344,7 @@ if args.verbose >= 2: print("DF:\n", df.head(50))
 # Save occupancy numbers before any further selection
 occupancy = df[df['HEAD'] == 2].groupby(['SL', 'LAYER', 'WIRE_NUM'])['HEAD'].count() # count performed a random column
 occupancy = occupancy.reset_index().rename(columns={'HEAD' : 'COUNTS'}) # reset the indices and make new ones, because the old indices are needed for selection
-occupancy['RATE'] = occupancy['COUNTS'] / runtime
+occupancy['RATE'] = occupancy['COUNTS'] / runTime
 
 # Output to csv files
 if len(args.outputdir) > 0:
@@ -358,6 +361,13 @@ df['T_TRIGGER'] = df[df['HEAD']==0].groupby('ORBIT_CNT')['TIME'].transform(np.mi
 df['T_SCINT'] = df[(df['FPGA']==1) & (df['TDC_CHANNEL']==128)].groupby('ORBIT_CNT')['TIME'].transform(np.min) # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
 df['T_SCINT'] -= config.TIME_OFFSET_SCINT
 
+# Estimate scintillator trigger rate
+nScint1 = len(df[(df['FPGA']==1) & (df['TDC_CHANNEL']==129)])
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Scintillator  1  rate:\t%.4f Hz" % (nScint1/runTime))
+#nScint = len(df.loc[(df['FPGA']==1) & (df['TDC_CHANNEL']==128), 'ORBIT_CNT'].notna().unique())
+nScint = len(df[(df['FPGA']==1) & (df['TDC_CHANNEL']==128)])
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Scintillator AND rate:\t%.4f Hz" % (nScint/runTime))
+
 # Step 2: Update trigger dataframe with trigger times
 trigger_time_map = dict(df.loc[df['T_TRIGGER'].notna(), ['ORBIT_CNT', 'T_TRIGGER']].to_records(index=False))
 triggers['T0'] = triggers['ORBIT'].map(trigger_time_map)
@@ -369,8 +379,8 @@ elif args.tzero == 'S':
     df['T0'] = df['T_SCINT']
 df[['T0', 'T_TRIGGER', 'T_SCINT']] = df.groupby('ORBIT_CNT')[['T0', 'T_TRIGGER', 'T_SCINT']].transform(np.max)
 
-nTriggers = len(df.loc[df['T0'].notna(), 'ORBIT_CNT'].unique())
-
+nTriggers = len(df.loc[df['T_TRIGGER'].notna(), 'ORBIT_CNT'].unique())
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "FPGA trigger     rate:\t%.4f Hz" % (nTriggers/runTime))
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Time mapping completed, found", nTriggers, "triggers")
 
 # Use only hits from now on
