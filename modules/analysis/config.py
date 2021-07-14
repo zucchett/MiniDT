@@ -49,8 +49,8 @@ MEANTIMER_SL_MULT_MIN = 2  # minimum number of different SLs in a cluster of mea
 
 
 # Parameters of the DAQ signals [must be optimised according to the exact setup performance]
-TIME_OFFSET = 0                      # synchronization w.r.t external trigger
-TIME_WINDOW = (-1000, 1500)             # time window (lower, higher) edge, after synchronization
+# TIME_OFFSET = 0                      # synchronization w.r.t external trigger
+# TIME_WINDOW = (-1000, 1500)             # time window (lower, higher) edge, after synchronization
 # TIME_OFFSET_SL = [0, 0, 0, 0]        # relative signal offset of each chamber
 # TIME_OFFSET_SL = [111, 111, 106, 106]        # relative signal offset of each chamber [RUN617]
 TIME_OFFSET_SL = [127, 127, 123, 122]        # relative signal offset of each chamber

@@ -15,14 +15,14 @@ from modules.reco import config_3_1 as config
 
 import argparse
 parser = argparse.ArgumentParser(description='Command line arguments')
-parser.add_argument("-d", "--display", action="store", type=int, default=0, dest="display", help="Number of event to display")
+parser.add_argument("-d", "--display", action="store", type=int, default=0, dest="display", help="Number of events to display")
 parser.add_argument("-e", "--event", action="store", type=int, default=0, dest="event", help="Inspect a single event")
 parser.add_argument("-f", "--flush", action="store_true", default=False, dest="flush", help="Discard first 128 words")
 parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="data/Run000966/output_raw.dat", help="Provide input files (either binary or txt)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="output/", help="Specify output directory, if empty no csv output is produced")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
 parser.add_argument("-p", "--parallel", action="store_true", default=False, dest="parallel", help="Enable CPU parallelization")
-parser.add_argument("-t", "--tzero", action="store", type=str, default=False, dest="tzero", help="Specify the algorithm to be used to determine the T0. M : meantimer, T : HT trigger, S : scintillators")
+parser.add_argument("-t", "--tzero", action="store", type=str, default=False, dest="tzero", help="Specify the algorithm to be used to determine the T0. M : meantimer, T : HT trigger, S : scintillators, R : scintillators + time refit")
 parser.add_argument("-s", "--suffix", action="store", type=str, default="", dest="suffix", help="Specify the suffix of the output files")
 parser.add_argument("-v", "--verbose", action="store", type=int, default=0, dest="verbose", help="Specify verbosity level")
 args = parser.parse_args()
@@ -31,7 +31,7 @@ runname = [x for x in args.filenames[0].split('/') if 'Run' in x][0] if "Run" in
 
 if len(args.outputdir) > 0:
     if not os.path.exists(args.outputdir): os.makedirs(args.outputdir)
-    for d in ["csv", "display", "plots", "trigger"]:
+    for d in ["csv", "display", "plots"]:
         if not os.path.exists(args.outputdir + runname + "_" + d + "/"): os.makedirs(args.outputdir + runname + "_" + d + "/")
 
 # Copy data from LNL to CERN
@@ -172,18 +172,29 @@ def recoSegments(hitlist):
         lrcomb = lrhits.iloc[list(comb)]
         # Try to reject improbable combinations: difference between adjacent wires should be 2 or smaller
         if len(lrcomb) >= 3 and max(abs(np.diff(lrcomb['WIRE'].astype(np.int16)))) > 2: continue
-        posx, posz = lrcomb['X'], lrcomb['Z']
-        seg_layer, seg_wire, seg_bx, seg_label, seg_idx = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values, lrcomb['HIT_INDEX'].values
+        posx, posz, posl = lrcomb['X'], lrcomb['Z'], lrcomb['X_LABEL']
+        seg_layer, seg_wire, seg_bx, seg_label, seg_idx = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values, lrcomb.index
         m, q, chi2 = fitFast(posx.to_numpy(), posz.to_numpy())
+        #m, q, chi2, dx = fit3D(posx.to_numpy(), posz.to_numpy(), posl.to_numpy())
         if chi2 < config.FIT_CHI2NDF_MAX and abs(m) > config.FIT_M_MIN: fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "nhits" : len(seg_idx), "pars" : [m, q], "idx" : seg_idx})
         
     fitResults.sort(key=lambda x: x["chi2"])
 
     if len(fitResults) > 0:
-        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [fitResults[0]["nhits"]], 'M' : [fitResults[0]["pars"][0]], 'SIGMAM' : [np.nan], 'Q' : [fitResults[0]["pars"][1]], 'SIGMAQ' : [np.nan], 'CHI2' : [fitResults[0]["chi2"]], 'HIT_INDEX' : [seg_idx], 'T0' : [itime]}), ignore_index=True)
+        f_nhits, f_m, f_q, f_chi2, f_dt, f_dx = fitResults[0]["nhits"], fitResults[0]["pars"][0], fitResults[0]["pars"][1], fitResults[0]["chi2"], 0., 0.
+        
+        if args.tzero == 'R':
+            # Refit with time
+            index, labels = fitResults[0]["idx"], fitResults[0]["label"]
+            selectedhits = lrhits.iloc[index]
+            f_m, f_q, f_chi2, f_dx = fit3D(selectedhits['X_WIRE'].to_numpy(), selectedhits['X_DRIFT'].to_numpy(), selectedhits['X_LABEL'].to_numpy(), selectedhits['Z'].to_numpy())
+            f_dt = f_dx / VDRIFT
+        
+        # Write results to dataframe
+        segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [f_nhits], 'M' : [f_m], 'SIGMAM' : [np.nan], 'Q' : [f_q], 'SIGMAQ' : [np.nan], 'CHI2' : [f_chi2], 'HIT_INDEX' : [seg_idx], 'T0' : [itime + f_dt], 'T0_SCINT' : [itime]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
             x_seg = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][1]) / fitResults[0]["pars"][0]
-            hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_SEG']] = ilabel, x_seg
+            hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_SEG', 'X_FITSHIFT', 'T0']] = ilabel, x_seg, f_dx, itime + f_dt
 
         # Missing hit interpolation
         if(fitResults[0]["nhits"] == 3):
@@ -203,13 +214,15 @@ def recoTracks(hitlist):
     iEvSl += 1
     if args.verbose == 1 and iEvSl % 100 == 0: print("Running track reconstruction [%.2f %%]" % (100.*iEvSl/nEvSl), end='\r')
 
-    iorbit, itime = hitlist['ORBIT'].values[0], hitlist['T0'].values[0]
+    global segments
+    iorbit, itime = hitlist['ORBIT'].values[0], hitlist['T_SCINT'].values[0]
 
     # Loop on the views (xz, yz)
     for view, sls in config.SL_FITS.items():
         #sl_ids = [sl.id for sl in sls]
         #for sl_idx in ([[str(x) for x in sl_ids]] + [[str(x)] for x in config.SL_VIEW[view] if not len(sl_ids) == 1 or not x in sl_ids]):
         for sl_idx in sls:
+            seg_t0 = segments.loc[(segments['ORBIT'] == iorbit) & (segments['CHAMBER'].isin(sl_idx)) & (np.isfinite(segments['T0'])), 'T0'].mean()
             viewhits = hitlist[(hitlist['CHAMBER'].isin(sl_idx)) & (hitlist['X'].notnull())]
             nhits = len(viewhits)
             hitlist['NHITS_TRACK'] = nhits
@@ -217,7 +230,7 @@ def recoTracks(hitlist):
             posxy, posz = viewhits[view[0].upper() + '_GLOB'], viewhits[view[1].upper() + '_GLOB']
             m, q, chi2 = fitFast(posxy.to_numpy(), posz.to_numpy())
             if chi2 < config.FIT_CHI2NDF_MAX and abs(m) > config.FIT_M_MIN:
-                segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [','.join([str(x) for x in sl_idx])], 'NHITS' : [nhits], 'M' : [m], 'SIGMAM' : [np.nan], 'Q' : [q], 'SIGMAQ' : [np.nan], 'CHI2' : [chi2], 'HIT_INDEX': [list(viewhits.index)], 'T0' : [itime]}), ignore_index=True)
+                segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [','.join([str(x) for x in sl_idx])], 'NHITS' : [nhits], 'M' : [m], 'SIGMAM' : [np.nan], 'Q' : [q], 'SIGMAQ' : [np.nan], 'CHI2' : [chi2], 'HIT_INDEX': [list(viewhits.index)], 'T0' : [seg_t0], 'T0_SCINT' : [itime]}), ignore_index=True)
                 if len(sl_idx) > 1: # Avoid overwriting track residues in case only one SL is fitted
                     sl_idxr = config.SL_VIEW[view]#sl_idx + ([2] if view == 'yz' and not 2 in sl_idx else [])
                     for isl in sl_idxr: #FIXME residues also for SL 2
@@ -305,12 +318,12 @@ if args.verbose >= 2: print("DF:\n", df.head(50))
 triggers = df[(df['HEAD'] == 4) | (df['HEAD'] == 5)].copy()
 triggers = triggers[triggers['FPGA'] == 0]
 # Remove consecutive words
-triggers['PARAM'] = triggers['PARAM'].loc[triggers['PARAM'].shift() != triggers['PARAM']]
+triggers['TDC_MEAS'] = triggers['TDC_MEAS'].loc[triggers['TDC_MEAS'].shift() != triggers['TDC_MEAS']]
 triggers['HEAD'] = triggers['HEAD'].loc[triggers['HEAD'].shift() != triggers['HEAD']]
-triggers = triggers[(triggers['HEAD'].notna()) | (triggers['PARAM'].notna())]
+triggers = triggers[(triggers['HEAD'].notna()) | (triggers['TDC_MEAS'].notna())]
 # Make parameters one-liner
-triggers.loc[triggers['HEAD'] == 4, 'M'] = triggers[triggers['HEAD'] == 4]['PARAM']
-triggers.loc[triggers['HEAD'] == 5, 'Q'] = triggers[triggers['HEAD'] == 5]['PARAM']
+triggers.loc[triggers['HEAD'] == 4, 'M'] = triggers[triggers['HEAD'] == 4]['TDC_MEAS']
+triggers.loc[triggers['HEAD'] == 5, 'Q'] = triggers[triggers['HEAD'] == 5]['TDC_MEAS']
 triggers[['M', 'Q']] = triggers.groupby('ORBIT_CNT')[['M', 'Q']].transform(np.max)
 triggers = triggers.drop_duplicates(subset=['ORBIT_CNT', 'M', 'Q'], keep='first')
 # Proper trigger dataframe formatting
@@ -375,11 +388,11 @@ triggers['T0'] = triggers['ORBIT'].map(trigger_time_map)
 # Step 3: T0 is the one that will be effectively used to determine TDRIFT
 if args.tzero == 'T':
     df['T0'] = df['T_TRIGGER']
-elif args.tzero == 'S':
+elif args.tzero in ['S', 'R']:
     df['T0'] = df['T_SCINT']
 df[['T0', 'T_TRIGGER', 'T_SCINT']] = df.groupby('ORBIT_CNT')[['T0', 'T_TRIGGER', 'T_SCINT']].transform(np.max)
 
-nTriggers = len(df.loc[df['T_TRIGGER'].notna(), 'ORBIT_CNT'].unique())
+nTriggers = len(triggers['ORBIT'].unique()) #len(df.loc[df['T_TRIGGER'].notna(), 'ORBIT_CNT'].unique())
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "FPGA trigger     rate:\t%.4f Hz" % (nTriggers/runTime))
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Time mapping completed, found", nTriggers, "triggers")
 
@@ -427,7 +440,10 @@ hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
 hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
 
 # Conversion from time to position
-mapconverter.addXleftright(hits)
+#mapconverter.addXleftright(hits)
+hits['X_DRIFT'] = np.minimum(np.maximum(hits['TDRIFT'], 0) * VDRIFT, XCELL/2.)
+hits['X_LEFT']  = hits['WIRE_POS'] - hits['X_DRIFT']
+hits['X_RIGHT'] = hits['WIRE_POS'] + hits['X_DRIFT']
 
 # Cosmetic changes to be compliant with common format
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'WIRE_POS' : 'X_WIRE', 'TDRIFT' : 'TIMENS'}, inplace=True)
@@ -438,7 +454,7 @@ if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Unpacking complet
 
 
 # Reconstruction
-events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_WIRE', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0', 'T_TRIGGER', 'T_SCINT', 'T_MEANT']].copy()
+events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_WIRE', 'X_DRIFT', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0', 'T_TRIGGER', 'T_SCINT', 'T_MEANT']].copy()
 
 events['X_LABEL'] = 0
 events['Y'] = 0.
@@ -450,7 +466,7 @@ events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
 #mapconverter.addTappinoNum(events)
 
 missinghits = pd.DataFrame(columns=['ORBIT', 'BX', 'CHAMBER', 'LAYER', 'WIRE', 'X', 'Y', 'Z'])
-segments = pd.DataFrame(columns=['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0'])
+segments = pd.DataFrame(columns=['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0', 'T0_SCINT'])
 
 # Reconstruction
 from modules.geometry.sl import SL
@@ -484,8 +500,8 @@ else:
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Reconstructing segments")
 
-events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT']
-events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT']
+events.loc[events['X_LABEL'] == 1, 'X'] = events['X_LEFT'] - events['X_FITSHIFT']
+events.loc[events['X_LABEL'] == 2, 'X'] = events['X_RIGHT'] + events['X_FITSHIFT']
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Adding global positions")
 

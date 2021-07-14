@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import scipy.stats as sp
 import itertools
+import scipy.optimize as opt
 #import numba as nb
 
 
@@ -51,6 +52,49 @@ def fitFast(x, y):
     chi2 = ((f - y)**2 ).sum() / (n - 1)
     b, a = 1./ovb, -ova/ovb
     return b, a, chi2
+
+
+def fit3D(x_wire, x_drift, x_label, y):
+    if len(x_wire) < 3 or len(x_wire) != len(x_drift) or len(x_drift) != len(x_label) or len(x_label) != len(y): return 0., 0., 999., 999.
+    y_wire, y_drift, y_label, x = x_wire.copy(), x_drift.copy(), x_label.copy(), y.copy()
+    y_label[y_label == 1] = -1
+    y_label[y_label == 2] = +1
+    y = y_wire + y_label * y_drift
+    n, xsum, ysum = len(x), x.sum(), y.sum()
+    ovb = (n * (x*y).sum() - xsum * ysum) / (n * (x**2).sum() - (xsum)**2 )
+    ova = (ysum - ovb * xsum) / n
+    if ovb == 0.: ovb = 1.e9
+    f = ovb * x + ova
+    chi2 = ((f - y)**2 ).sum() / (n - 1)
+    
+    # Nested function
+    def chiSquare3D(args):
+        _ovb, _ova, _dy = args
+        _f = _ovb * x + _ova
+        _y = y_wire + y_label * (y_drift + _dy)
+        chi2 = ( (_f - _y)**2 ).sum() / (n - 1)
+        return chi2
+    
+    x0 = np.array([ovb, ova, 0.])
+    bnds = None #((None, None), (None, None), (0, 21.))
+    result =  opt.minimize(chiSquare3D, x0, bounds=bnds)
+    fovb, fova, fdy = result['x']
+    fchi2 = result['fun']
+    
+    
+    #_chi2 = (((fa*x + fb) - (y + l*fdx))**2 ).sum() / (n - 1) OK
+    
+    #print("chi2: ", chi2, fchi2)
+    #print("a   : ", ova, fova)
+    #print("b   : ", ovb, fovb)
+    #print("dx  : ", 0., fdy)
+    #print(result)
+    
+    # Re-rotate back to normal reference system and prepare output
+    b, a = 1./ovb, -ova/ovb
+    
+    if not result['status'] == 0: return 0., 0., 999., 999.
+    return b, a, fchi2, fdy
 
 ### -------------------------------------------
 

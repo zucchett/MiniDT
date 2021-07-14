@@ -78,8 +78,8 @@ for iorbit, ev in gp:
         if glb['NHITS'].values[0] >= config.FIT_GLOBAL_MINHITS:
             if loc['NHITS'].values[0] >= config.FIT_LOCAL_MINHITS:
                 nA = nA.append(pd.DataFrame.from_dict({'n_hits_local' : [n_hits_local], 'angleXZ_global' : [angleXZ_global], 'angleYZ_global' : [angleYZ_global], 'radXZ_global' : [radXZ_global], 'radYZ_global' : [radYZ_global]}), ignore_index=True)
-
-                gm_rad, gm, gq, gt = glb['M_RAD'].values[0], glb['M'].values[0], glb['Q'].values[0], glb['T0'].values[0]
+                
+                gm_rad, gm, gq, gt = glb['M_RAD'].values[0], glb['M'].values[0], glb['Q'].values[0], glb['T0_SCINT'].values[0]
                 gx0 = (z0 - gq) / gm # global fit has global coordinates
                 lm_rad, lm, lq, lt = loc['M_RAD'].values[0], loc['M'].values[0], loc['Q'].values[0], loc['T0'].values[0]
                 lx0 = (z0 - lq) / lm # local fit has local coordinates
