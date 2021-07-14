@@ -395,7 +395,7 @@ def plotResidues():
             dx, dx_borders = np.histogram(nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == chamber) & (nhits[num_hits]['X_LABEL'] == 2), 'RESIDUES_TRACK'].dropna()*-1., bins=np.arange(-4., 4., 0.05))
             symm = (sx + dx) * 0.5
             pars = plotHist(axs[idx], data=symm, name="Global (RIGHT-LEFT)/2 residues [CHAMBER %d]" % (chamber), title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
-            if chamber == config.SL_TEST and num_hits == 0 and pars is not None: print("Offset calibration CHAMBER %d:\t%.2f mm" % (chamber, pars[1]))
+            if chamber == config.SL_TEST and num_hits == 0 and len(pars) > 1: print("Offset calibration CHAMBER %d:\t%.2f mm" % (chamber, pars[1]))
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_asym_track_chamber.png")
     fig.savefig(args.outputdir + runname + "_plots/residues/residues_asym_track_chamber.pdf")
@@ -662,10 +662,21 @@ def plotResolution():
     plt.close(fig)
     
     fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(15, 10))
-    for num_hits in [0, 3, 4]: plotHist(axs, data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] ==config.SL_TEST) & (nhits[num_hits]['DELTA_ANGLE'] < 1.) & (nhits[num_hits]['DELTA_X0'] < 1.) & (nhits[num_hits]['TRACK_CHI2'] < 1.), 'RESIDUES_TRACK'], name="Global residues [SL %d]" % config.SL_TEST, title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+    for num_hits in [0, 3, 4]: plotHist(axs, data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == config.SL_TEST) & (nhits[num_hits]['DELTA_ANGLE'] < 1.) & (nhits[num_hits]['DELTA_X0'] < 1.) & (nhits[num_hits]['TRACK_CHI2'] < 1.), 'RESIDUES_TRACK'], name="Global residues [SL %d]" % config.SL_TEST, title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/resolution/resolution.png")
     fig.savefig(args.outputdir + runname + "_plots/resolution/resolution.pdf")
+    plt.close(fig)
+    
+    # Times
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
+    for idx, chamber in zip(iax, isl):
+        for num_hits in [0, 3, 4]:
+            t_df = segments.loc[(segments['VIEW'] == '0') & (segments['CHAMBER'] == str(chamber))] if num_hits == 0 else segments.loc[(segments['VIEW'] == '0') & (segments['CHAMBER'] == str(chamber)) & (segments['NHITS'] == num_hits)]
+            plotHist(axs[idx], data=t_df['T0_SCINT'] - t_df['T0'], name="Time difference [SL %d]" % chamber, title="$t_{scint} - t_{0}$", unit="ns", bins=np.arange(-25.5, 25.5, 1.), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/resolution/times.png")
+    fig.savefig(args.outputdir + runname + "_plots/resolution/times.pdf")
     plt.close(fig)
 
 
@@ -918,8 +929,9 @@ def plotParameters():
         axs[idx].set_title("Segments $\chi^2$ [SL %d]" % chamber)
         axs[idx].set_xlabel("$\chi^2$/n.d.f.")
         axs[idx].set_ylabel("Counts")
-        axs[idx].hist(segments.loc[segments['CHAMBER'].astype('int32') == chamber, 'CHI2'], bins=chi2bins)
+        axs[idx].hist(segments.loc[segments['CHAMBER'] == str(chamber), 'CHI2'], bins=chi2bins)
         axs[idx].set_xscale("log")
+        print("SL %d chi2 mean: %.2f" % (chamber, segments.loc[segments['CHAMBER'] == str(chamber), 'CHI2'].mean()))
     for w, view in enumerate(['XZ', 'YZ']):
         axs[(2, w)].set_title("Track $\chi^2$ [%s]" % view)
         axs[(2, w)].set_xlabel("$\chi^2$/n.d.f.")
@@ -938,7 +950,7 @@ def plotParameters():
         for chamber in range(4):
             axs[i][chamber].set_title("Segments %s [SL %d]" % (p, chamber))
             axs[i][chamber].set_xlabel(parlabel[p])
-            axs[i][chamber].hist(segments.loc[segments['CHAMBER'].astype('int32') == chamber, p], bins=parbins[p])
+            axs[i][chamber].hist(segments.loc[segments['CHAMBER'] == str(chamber), p], bins=parbins[p])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/parameters/segment_par.png")
     fig.savefig(args.outputdir + runname + "_plots/parameters/segment_par.pdf")
@@ -967,6 +979,7 @@ def plotParameters():
     fig.savefig(args.outputdir + runname + "_plots/parameters/segment_x0_chamber_layer.png")
     fig.savefig(args.outputdir + runname + "_plots/parameters/segment_x0_chamber_layer.pdf")
     plt.close(fig)
+    
 
 
 
@@ -1009,9 +1022,11 @@ def plotAlignment():
             plotHist(axs[0][i], data=ex['deltaA_%d%d' % (sl[0], sl[1])], name="Angle difference [SL %d vs SL %d]" % (sl[0], sl[1]), title="Angle difference [SL %d - SL %d]" % (sl[0], sl[1]), unit="deg", bins=np.arange(-10., 10., 0.5), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
             # 2D
             axs[1][i].set_title("Angle difference [SL %d vs SL %d]" % (sl[0], sl[1]))
-            axs[1][i].set_ylabel("Angle [SL %d] (deg)" % (sl[0]))
-            axs[1][i].set_xlabel("Angle difference [SL %d - SL %d] (deg)" % (sl[0], sl[1]))
-            h = axs[1][i].hist2d(ex['deltaA_%d%d' % (sl[0], sl[1])], ex['ANGLE_DEG_%d' % (sl[0])], bins=[40, 50], range=[[-10., 10.], [-5., 5.]],)
+            #axs[1][i].set_xlabel("Angle difference [SL %d - SL %d] (deg)" % (sl[0], sl[1]))
+            axs[1][i].set_xlabel("Angle [SL %d] (deg)" % (sl[0]))
+            axs[1][i].set_ylabel("Angle [SL %d] (deg)" % (sl[1]))
+            #h = axs[1][i].hist2d(ex['deltaA_%d%d' % (sl[0], sl[1])], ex['ANGLE_DEG_%d' % (sl[0])], bins=[40, 50], range=[[-10., 10.], [-5., 5.]],)
+            h = axs[1][i].hist2d(ex['ANGLE_DEG_%d' % (sl[0])], ex['ANGLE_DEG_%d' % (sl[1])], bins=[120, 120], range=[[-30., 30.], [-30., 30.]],)
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_angles.png")
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_angles.pdf")
@@ -1028,6 +1043,7 @@ def plotAlignment():
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_positions.pdf")
     plt.close(fig)
 
+    # Delta parameters
     fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(40, 30))
     for i, p in enumerate(['ANGLE_DEG', 'Q', 'X0']):
         for j, chamber in enumerate(config.SL_VIEW[config.PHI_VIEW]):
@@ -1037,6 +1053,7 @@ def plotAlignment():
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.png")
     fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.pdf")
     plt.close(fig)
+    
 
 
 def plotTrigger():
@@ -1133,10 +1150,11 @@ def plotTrigger():
     for num_hits in [0, 3, 4]:
         plotHist(axs[0], data=nmt[num_hits]['deltaM_global_local']*1.e3, name="Angle", title="$\\alpha_{local} - \\alpha_{global}$", unit="mrad", bins=np.arange(-100., 100., 1.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
         plotHist(axs[1], data=nmt[num_hits]['deltaQ_global_local'], name="Position", title="$x^0_{local} - x^0_{global}$", unit="mm", bins=np.arange(-5., 5., 0.1), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
-    axs[2].set_title("Angle vs position")
-    axs[2].set_xlabel("$\\alpha_{local} - \\alpha_{global}$ (mrad)")
-    axs[2].set_ylabel("$x^0_{local} - x^0_{global}$ (mm)")
-    axs[2].hist2d(x=mt['deltaM_global_local']*1.e3, y=mt['deltaQ_global_local'], bins=[np.arange(-50., 50., 2.), np.arange(-2., 2., 0.1)])
+        plotHist(axs[2], data=nmt[num_hits]['deltaT_global_local'], name="Time", title="$t^0_{scintillator} - t^0_{refit}$", unit="ns", bins=np.arange(-25./30.*50, 50./30.*50, 2./30.*50.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+    #axs[2].set_title("Angle vs position")
+    #axs[2].set_xlabel("$\\alpha_{local} - \\alpha_{global}$ (mrad)")
+    #axs[2].set_ylabel("$x^0_{local} - x^0_{global}$ (mm)")
+    #axs[2].hist2d(x=mt['deltaM_global_local']*1.e3, y=mt['deltaQ_global_local'], bins=[np.arange(-50., 50., 2.), np.arange(-2., 2., 0.1)])
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/trigger/global_vs_local.png")
     fig.savefig(args.outputdir + runname + "_plots/trigger/global_vs_local.pdf")
