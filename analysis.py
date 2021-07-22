@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-from modules.mapping.config import TDRIFT, VDRIFT, XCELL, ZCELL, DURATION, TIME_WINDOW
+from modules.mapping.config import TDRIFT, VDRIFT, XCELL, ZCELL, DURATION
 from modules.mapping import *
 from modules.analysis.patterns import PATTERNS, PATTERN_NAMES, ACCEPTANCE_CHANNELS, MEAN_TZERO_DIFF, MEANTIMER_ANGLES, meantimereq, mean_tzero, tzero_clusters
 from modules.reco.functions import *
@@ -141,9 +141,7 @@ def recoSegments(hitlist):
 
     global segments, missinghits
     iorbit, isl, itime = hitlist['ORBIT'].values[0], hitlist['CHAMBER'].values[0], hitlist['T0'].values[0]
-
     nhits = len(hitlist)
-    hitlist['NHITS_SEG'] = nhits
     
     if nhits < config.NHITS_LOCAL_MIN or nhits > config.NHITS_LOCAL_MAX:
         if args.verbose >= 2: print("Skipping       event", iorbit, ", chamber", isl, ", exceeds the maximum/minimum number of hits (", nhits, ")")
@@ -205,6 +203,8 @@ def recoSegments(hitlist):
             m_wire_num = mapconverter.getWireNumber(m_xhit, m_layer)
             missinghits = missinghits.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'BX' : [np.nan], 'CHAMBER' : [isl], 'LAYER' : [m_layer], 'WIRE' : [m_wire_num], 'X' : [m_xhit], 'Y' : [0.], 'Z' : [m_zhit]}), ignore_index=True)
     
+        hitlist['NHITS_SEG'] = fitResults[0]["nhits"]
+        
     return hitlist
 
 ### -------------------------------------------
@@ -215,22 +215,22 @@ def recoTracks(hitlist):
     if args.verbose == 1 and iEvSl % 100 == 0: print("Running track reconstruction [%.2f %%]" % (100.*iEvSl/nEvSl), end='\r')
 
     global segments
-    iorbit, itime = hitlist['ORBIT'].values[0], hitlist['T_SCINT'].values[0]
+    iorbit, itime = hitlist['ORBIT'].values[0], hitlist['T_SCINT_A'].values[0]
 
     # Loop on the views (xz, yz)
     for view, sls in config.SL_FITS.items():
         #sl_ids = [sl.id for sl in sls]
         #for sl_idx in ([[str(x) for x in sl_ids]] + [[str(x)] for x in config.SL_VIEW[view] if not len(sl_ids) == 1 or not x in sl_ids]):
         for sl_idx in sls:
-            seg_t0 = segments.loc[(segments['ORBIT'] == iorbit) & (segments['CHAMBER'].isin(sl_idx)) & (np.isfinite(segments['T0'])), 'T0'].mean()
+            seg_t0 = segments.loc[(segments['ORBIT'] == iorbit) & (segments['CHAMBER'].isin(sl_idx)), 'T0'].mean() # & (np.isfinite(segments['T0'])) FIXME
             viewhits = hitlist[(hitlist['CHAMBER'].isin(sl_idx)) & (hitlist['X'].notnull())]
             nhits = len(viewhits)
-            hitlist['NHITS_TRACK'] = nhits
             if nhits < 3: continue #*len(sl_idx)
             posxy, posz = viewhits[view[0].upper() + '_GLOB'], viewhits[view[1].upper() + '_GLOB']
             m, q, chi2 = fitFast(posxy.to_numpy(), posz.to_numpy())
             if chi2 < config.FIT_CHI2NDF_MAX and abs(m) > config.FIT_M_MIN:
                 segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [','.join([str(x) for x in sl_idx])], 'NHITS' : [nhits], 'M' : [m], 'SIGMAM' : [np.nan], 'Q' : [q], 'SIGMAQ' : [np.nan], 'CHI2' : [chi2], 'HIT_INDEX': [list(viewhits.index)], 'T0' : [seg_t0], 'T0_SCINT' : [itime]}), ignore_index=True)
+                hitlist['NHITS_TRACK'] = nhits
                 if len(sl_idx) > 1: # Avoid overwriting track residues in case only one SL is fitted
                     sl_idxr = config.SL_VIEW[view]#sl_idx + ([2] if view == 'yz' and not 2 in sl_idx else [])
                     for isl in sl_idxr: #FIXME residues also for SL 2
@@ -261,7 +261,8 @@ def fix_orbit(orbit_arr):
 itime = datetime.now()
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Starting script, importing dataset...")
 
-### Open file ###
+
+################################################## PART 1: Read file(s) and map channels
 
 df = pd.DataFrame()
 
@@ -280,13 +281,14 @@ for i, filename in enumerate(args.filenames):
         # force 7 fields
         # in case of forcing, for some reason, the first raw is not interpreted as columns names
         dt = pd.read_csv(filename, \
-            names=['HEAD', 'FPGA', 'TDC_CHANNEL', 'ORBIT_CNT', 'BX_COUNTER', 'TDC_MEAS', 'TRG_QUALITY'], \
-            dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'int32', 'TRG_QUALITY' : 'float64'}, \
+            names=['HEAD', 'FPGA', 'TDC_CHANNEL', 'ORBIT_CNT', 'BX_COUNTER', 'TDC_MEAS'], \
+            dtype={'HEAD' : 'int32', 'FPGA' : 'int32', 'TDC_CHANNEL' : 'int32', 'ORBIT_CNT' : 'int32', 'BX_COUNTER' : 'int32', 'TDC_MEAS' : 'float64'}, \
             low_memory=False, \
             skiprows=1, \
             nrows=args.max*1024 + 1 if args.max > 0 else 1e9, \
         )
         df = df.append(dt, ignore_index=True)
+        df.loc[(df['HEAD'] == 0) | (df['HEAD'] == 2), 'TDC_MEAS'] = df.loc[(df['HEAD'] == 0) | (df['HEAD'] == 2), 'TDC_MEAS'] - 1 # Correct TDC as the input is in the [1, 30] range
 
     else:
         print("File format not recognized, skipping file...")
@@ -297,11 +299,16 @@ runTime = (df['ORBIT_CNT'].max() - df['ORBIT_CNT'].min()) * DURATION['orbit'] * 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Read %d lines from %d file(s)." % (len(df), len(args.filenames)), "Duration of the run:\t%d s" % runTime)
 
 
-df['TDC_MEAS'] = df['TDC_MEAS'] - 1 # Correct TDC as the input is in the [1, 30] range
+
 # Swap channels
 #df.loc[(df['FPGA'] == 0) & (df['TDC_CHANNEL'] == 109), 'TDC_CHANNEL'] = -9
 #df.loc[(df['FPGA'] == 0) & (df['TDC_CHANNEL'] == 110), 'TDC_CHANNEL'] = 109
 #df.loc[(df['FPGA'] == 0) & (df['TDC_CHANNEL'] == -9), 'TDC_CHANNEL'] = 110
+# FIXME: SL 0 and 1 are swapped
+#pd.options.mode.chained_assignment = None
+#df.loc[df['SL'] == 0, 'SL'] = -1
+#df.loc[df['SL'] == 1, 'SL'] = 0
+#df.loc[df['SL'] == -1, 'SL'] = 1
 df = df[df['TDC_CHANNEL'] < 135] # Remove tdc_channel = 139 since they are not physical events
 df = df[df['BX_COUNTER'] < 4095] # Remove BX == 4095 as they do not have meaningful info and spoil the trigger T
 if args.event > 0: df = df[df['ORBIT_CNT'] == args.event]
@@ -312,11 +319,35 @@ if len(df) == 0:
 
 if args.verbose >= 2: print("DF:\n", df.head(50))
 
+### Split dataframes according to their content
+triggers = df[(df['HEAD'] == 4) | (df['HEAD'] == 5)].copy() # Trigger parameters
+df = df.astype({'TDC_MEAS' : int}, errors='ignore') # Cast TDC_MEAS to int, as they are used in trigger t0, scrint t0, and hits
+df['TIME'] = df['BX_COUNTER'] * DURATION['bx'] + df['TDC_MEAS'] / 30 * DURATION['bx'] # Use time instead of BX. This is valid for both trigger and scintillator, as they use the same columns
+trigger_time = df[df['HEAD']==0].copy() # Trigger times
+scint_A_time = df[(df['FPGA']==1) & (df['TDC_CHANNEL']==128)].copy() # Scintillator times
+scint_1_time = df[(df['FPGA']==1) & (df['TDC_CHANNEL']==129)].copy() # Scintillator times
+df = df[(df['HEAD'] == 2) & (df['TDC_CHANNEL'] < 128)] # Physics hits
 
-# Trigger tracks
-#df['ORBIT_CNT'] = fix_orbit(df.ORBIT_CNT.values)
-triggers = df[(df['HEAD'] == 4) | (df['HEAD'] == 5)].copy()
-triggers = triggers[triggers['FPGA'] == 0]
+# Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
+mapconverter = Mapping()
+df = mapconverter.virtex7(df)
+#df = mapconverter.virtex7obdt(df)
+
+if args.verbose >= 2: print("DF:\n", df.head(50))
+
+# Save occupancy numbers before any further selection
+occupancy = df.groupby(['SL', 'LAYER', 'WIRE_NUM'])['HEAD'].count() # count performed a random column
+occupancy = occupancy.reset_index().rename(columns={'HEAD' : 'COUNTS'}) # reset the indices and make new ones, because the old indices are needed for selection
+occupancy['RATE'] = occupancy['COUNTS'] / runTime
+
+if args.verbose >= 2:
+    print("Occupancy:\n", occupancy.head(10))
+
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Channel mapping completed")
+
+################################################## PART 2: Trigger parameters
+
+triggers = triggers[(triggers['FPGA'] == 0) & (triggers['TDC_CHANNEL'] == config.TRIGGER_CELL)]
 # Remove consecutive words
 triggers['TDC_MEAS'] = triggers['TDC_MEAS'].loc[triggers['TDC_MEAS'].shift() != triggers['TDC_MEAS']]
 triggers['HEAD'] = triggers['HEAD'].loc[triggers['HEAD'].shift() != triggers['HEAD']]
@@ -340,64 +371,43 @@ if args.verbose >= 2: print("Triggers:\n", triggers.head(50))
 ##df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='last')
 #df = df.drop_duplicates(subset=['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'], keep='first')
 
-# Map TDC_CHANNEL, FPGA to SL, LAYER, WIRE_NUM, WIRE_POS
-mapconverter = Mapping()
-df = mapconverter.virtex7(df)
-#df = mapconverter.virtex7obdt(df)
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Trigger parameters completed")
 
-# FIXME: SL 0 and 1 are swapped
-pd.options.mode.chained_assignment = None
-df.loc[df['SL'] == 0, 'SL'] = -1
-df.loc[df['SL'] == 1, 'SL'] = 0
-df.loc[df['SL'] == -1, 'SL'] = 1
+################################################## PART 3: Times
 
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Channel mapping completed")
-if args.verbose >= 2: print("DF:\n", df.head(50))
+# Calibrate hit times
+df['TIME'] = df['TIME'] + df['SL'].map(config.TIME_OFFSET_SL) + df['LAYER'].map(config.TIME_OFFSET_LAYER)
 
-# Save occupancy numbers before any further selection
-occupancy = df[df['HEAD'] == 2].groupby(['SL', 'LAYER', 'WIRE_NUM'])['HEAD'].count() # count performed a random column
-occupancy = occupancy.reset_index().rename(columns={'HEAD' : 'COUNTS'}) # reset the indices and make new ones, because the old indices are needed for selection
-occupancy['RATE'] = occupancy['COUNTS'] / runTime
+# Calibrate scintillator times
+scintil_time['TIME'] = scintil_time['TIME'] + config.TIME_OFFSET_SCINT
 
-# Output to csv files
-if len(args.outputdir) > 0:
-    occupancy.to_csv(args.outputdir + runname + "_csv/occupancy" + args.suffix + ".csv", header=True, index=False)
+# Create scintillator time map
+scint_A_time['TIME'] = scint_A_time.groupby('ORBIT_CNT')['TIME'].transform(np.nanmin)
+scint_A_time_map = dict(scint_A_time.loc[scint_A_time['TIME'].notna(), ['ORBIT_CNT', 'TIME']].to_records(index=False))
 
-if args.verbose >= 2:
-    print("Occupancy:\n", occupancy.head(10))
+# Create trigger map and update trigger dataframe with trigger times
+trigger_time['TIME'] = trigger_time.groupby('ORBIT_CNT')['TIME'].transform(np.nanmin)
+trigger_time_map = dict(trigger_time.loc[trigger_time['TIME'].notna(), ['ORBIT_CNT', 'TIME']].to_records(index=False))
 
-### TIMES ###
-# Step 1: In any case (even if the meantimer is run), calculate the trigger BX0
+# Update hits and trigger dataframes
+df['T_SCINT_A'] = df['ORBIT_CNT'].map(scint_A_time_map)
+df['T_TRIGGER'] = df['ORBIT_CNT'].map(trigger_time_map)
+triggers['T0'] = triggers['ORBIT'].map(trigger_time_map)
 df['T_MEANT'] = np.nan
-df['TIME'] = df['BX_COUNTER'] * DURATION['bx'] + df['TDC_MEAS'] / 30 * DURATION['bx'] # Use time instead of BX. This is valid for both trigger and scintillator, as they use the same columns
-df['T_TRIGGER'] = df[df['HEAD']==0].groupby('ORBIT_CNT')['TIME'].transform(np.min) # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
-df['T_SCINT'] = df[(df['FPGA']==1) & (df['TDC_CHANNEL']==128)].groupby('ORBIT_CNT')['TIME'].transform(np.min) # Take the minimum BX selected among the macro-cells, and propagate it to the other rows in the same orbit
-df['T_SCINT'] -= config.TIME_OFFSET_SCINT
 
 # Estimate scintillator trigger rate
-nScint1 = len(df[(df['FPGA']==1) & (df['TDC_CHANNEL']==129)])
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Scintillator  1  rate:\t%.4f Hz" % (nScint1/runTime))
-#nScint = len(df.loc[(df['FPGA']==1) & (df['TDC_CHANNEL']==128), 'ORBIT_CNT'].notna().unique())
-nScint = len(df[(df['FPGA']==1) & (df['TDC_CHANNEL']==128)])
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Scintillator AND rate:\t%.4f Hz" % (nScint/runTime))
-
-# Step 2: Update trigger dataframe with trigger times
-trigger_time_map = dict(df.loc[df['T_TRIGGER'].notna(), ['ORBIT_CNT', 'T_TRIGGER']].to_records(index=False))
-triggers['T0'] = triggers['ORBIT'].map(trigger_time_map)
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Scintillator AND rate:\t%.4f Hz" % (len(scint_A_time['ORBIT'].unique())/runTime))
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Scintillator  1  rate:\t%.4f Hz" % (len(scint_1_time['ORBIT'].unique())/runTime))
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "FPGA trigger     rate:\t%.4f Hz" % (len(trigger_time['ORBIT'].unique())/runTime))
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Time mapping completed, found", len(triggers['ORBIT'].unique()), "triggers")
 
 # Step 3: T0 is the one that will be effectively used to determine TDRIFT
-if args.tzero == 'T':
-    df['T0'] = df['T_TRIGGER']
-elif args.tzero in ['S', 'R']:
-    df['T0'] = df['T_SCINT']
-df[['T0', 'T_TRIGGER', 'T_SCINT']] = df.groupby('ORBIT_CNT')[['T0', 'T_TRIGGER', 'T_SCINT']].transform(np.max)
-
-nTriggers = len(triggers['ORBIT'].unique()) #len(df.loc[df['T_TRIGGER'].notna(), 'ORBIT_CNT'].unique())
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "FPGA trigger     rate:\t%.4f Hz" % (nTriggers/runTime))
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Time mapping completed, found", nTriggers, "triggers")
-
-# Use only hits from now on
-df = df[(df['HEAD'] == 2) & (df['TDC_CHANNEL'] < 128)]
+if args.tzero == 'T': df['T0'] = df['T_TRIGGER']
+elif args.tzero in ['S', 'R']: df['T0'] = df['T_SCINT_A']
+else:
+    print("T0 determination method not recognized, exiting...")
+    exit()
+#df[['T0', 'T_TRIGGER', 'T_SCINT']] = df.groupby('ORBIT_CNT')[['T0', 'T_TRIGGER', 'T_SCINT']].transform(np.max)
 
 # Determine BX0 either using meantimer or the trigger BX assignment
 if args.tzero == 'M':
@@ -419,6 +429,10 @@ if args.tzero == 'M':
     if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Meantimer completed")
 
 
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Time assignment completed")
+
+################################################## PART 4: Cleaning and position assignment
+
 # Select only hits with time information
 losthits = df.loc[df['T0'].isnull()].copy()
 hits = df.loc[df['T0'].notna()].copy()
@@ -427,17 +441,14 @@ if len(hits) == 0:
     print("No entry with non-NaN T0, exiting...")
     exit()
 
-# Add time calibration (offset)
-hits['TOFFSET'] = hits['SL'].map(config.TIME_OFFSET_SL) + hits['LAYER'].map(config.TIME_OFFSET_LAYER)
-
 # Create column TDRIFT
-hits['TDRIFT'] = hits['BX_COUNTER'] * DURATION['bx'] - hits['T0'] + hits['TDC_MEAS']*DURATION['tdc'] + hits['TOFFSET']
+hits['TDRIFT'] = hits['TIME'] - hits['T0']
 
 # Find events
-hits = hits[(hits['TDRIFT']>TIME_WINDOW[0]) & (hits['TDRIFT']<TIME_WINDOW[1])]
+hits = hits[(hits['TDRIFT']>config.TIMEBOX[0]) & (hits['TDRIFT']<config.TIMEBOX[1])]
 
 # Count hits in each event
-hits['NHITS'] = hits.groupby('ORBIT_CNT')['TDC_CHANNEL'].transform(np.size)
+hits['NHITS'] = hits.groupby('ORBIT_CNT')['HEAD'].transform(np.size)
 
 # Conversion from time to position
 #mapconverter.addXleftright(hits)
@@ -450,14 +461,15 @@ hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER',
 
 if args.verbose >= 2: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 
-if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Unpacking completed")
+if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Cleaning completed")
 
+
+################################################## PART 5: Reconstruction
 
 # Reconstruction
-events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_WIRE', 'X_DRIFT', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0', 'T_TRIGGER', 'T_SCINT', 'T_MEANT']].copy()
+events = hits[['ORBIT', 'BX', 'NHITS', 'CHAMBER', 'LAYER', 'WIRE', 'X_WIRE', 'X_DRIFT', 'X_LEFT', 'X_RIGHT', 'Z', 'TIMENS', 'TDC_MEAS', 'T0', 'T_TRIGGER', 'T_SCINT_A', 'T_MEANT']].copy()
 
-events['X_LABEL'] = 0
-events['Y'] = 0.
+events[['X_LABEL', 'X_FITSHIFT', 'Y']] = [0, 0., 0.]
 events[['X', 'X_SEG', 'X_TRACK']] = [np.nan, np.nan, np.nan]
 events[['X_TRACK_GLOB', 'Y_TRACK_GLOB']] = [np.nan, np.nan]
 events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
@@ -537,6 +549,36 @@ for iSL, sl in SLs.items():
 rtime = datetime.now()
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Reconstruction completed")
 
+
+################################################## PART 6: Trigger-segment matching
+
+# Get trigger dict for M and Q and add them to segments
+trigger_m_map = dict(triggers.loc[triggers['M'].notna(), ['ORBIT', 'M']].to_records(index=False))
+trigger_q_map = dict(triggers.loc[triggers['Q'].notna(), ['ORBIT', 'Q']].to_records(index=False))
+# Add trigger time, m, q to segments
+segments['T_TRIG'] = segments['ORBIT'].map(trigger_time_map)
+segments['M_TRIG'] = segments['ORBIT'].map(trigger_m_map)
+segments['Q_TRIG'] = segments['ORBIT'].map(trigger_q_map)
+
+# Use the convention where 0 is vertical
+triggers['M_RAD'] = np.arctan(triggers['M'])
+segments['M_RAD'] = np.arctan(segments['M'])
+segments['M_TRIG_RAD'] = np.arctan(segments['M_TRIG'])
+
+triggers['M_RAD'] = np.where(triggers['M_RAD'] < 0, triggers['M_RAD'] + math.pi/2., triggers['M_RAD'] - math.pi/2.)
+segments['M_RAD'] = np.where(segments['M_RAD'] < 0, segments['M_RAD'] + math.pi/2., segments['M_RAD'] - math.pi/2.)
+segments['M_TRIG_RAD'] = np.where(segments['M_TRIG_RAD'] < 0, segments['M_TRIG_RAD'] + math.pi/2., segments['M_TRIG_RAD'] - math.pi/2.)
+
+triggers['M_DEG'] = np.degrees(triggers['M_RAD'])
+segments['M_DEG'] = np.degrees(segments['M_RAD'])
+segments['M_TRIG_DEG'] = np.degrees(segments['M_TRIG_RAD'])
+
+triggers['X0'] = - triggers['Q'] / triggers['M']
+segments['X0'] = - segments['Q'] / segments['M']
+segments['X0_TRIG'] = - segments['Q_TRIG'] / segments['M_TRIG']
+
+################################################## PART 7: Write output
+
 if args.verbose >= 2:
     print(events.head(50))
     print(missinghits.tail(10))
@@ -550,10 +592,15 @@ if len(args.outputdir) > 0:
     missinghits.to_csv(args.outputdir + runname + "_csv/missinghits" + args.suffix + ".csv", header=True, index=False)
     segments.to_csv(args.outputdir + runname + "_csv/segments" + args.suffix + ".csv", header=True, index=False)
     triggers.to_csv(args.outputdir + runname + "_csv/triggers" + args.suffix + ".csv", header=True, index=False)
+    occupancy.to_csv(args.outputdir + runname + "_csv/occupancy" + args.suffix + ".csv", header=True, index=False)
+    
 
     if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Output files saved in directory", args.outputdir + runname + "_csv/")
 else:
     if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Output directory not specified, no file saved")
+
+
+################################################## PART 8: Event display
 
 # Event display
 import bokeh
@@ -643,7 +690,7 @@ for orbit, hitlist in evs:
         bokeh.io.output_file(args.outputdir + "/" + runname + "_display/orbit_%d.html" % orbit, mode='cdn') #args.outputdir
         bokeh.io.save(bokeh.layouts.layout(plots))
         #bokeh.io.export_png(bokeh.layouts.layout(plots), filename="output/" + runname + "_display/orbit_%d.png" % orbit)
-        if args.verbose >= 2: print("Event dispaly number", orbit, "saved in", args.outputdir + runname + "_display/")
+        if args.verbose >= 2: print("Event display number", orbit, "saved in", args.outputdir + runname + "_display/")
 
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Done.")

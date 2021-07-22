@@ -88,7 +88,7 @@ for iorbit, ev in gp:
                     nT = nT.append(pd.DataFrame.from_dict({'n_hits_local' : [n_hits_local], 'angleXZ_global' : [angleXZ_global], 'angleYZ_global' : [angleYZ_global], 'radXZ_global' : [radXZ_global], 'radYZ_global' : [radYZ_global]}), ignore_index=True)
                     
                     tm_rad, tm, tq, tt = triggers.loc[triggers['ORBIT'] == iorbit, 'M_RAD'].values, triggers.loc[triggers['ORBIT'] == iorbit, 'M'].values, triggers.loc[triggers['ORBIT'] == iorbit, 'Q'].values, triggers.loc[triggers['ORBIT'] == iorbit, 'T0'].values
-                    tx0 = (- tq) / tm if not np.any(tm[np.isnan(tm) | np.isinf(tm)]) else np.zeros(len(tm)) # trigger has local coordinates
+                    tx0 = (- tq / tm) if not np.any(tm[np.isnan(tm) | np.isinf(tm)]) else np.zeros(len(tm)) # trigger has local coordinates
                     # Comparison with global track
                     for m_rad, x0, t in zip(tm_rad, tx0, tt):
                         if abs(gm_rad - m_rad) < delta_gm: delta_gm = (gm_rad - m_rad)

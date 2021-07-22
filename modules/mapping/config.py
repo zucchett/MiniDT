@@ -21,7 +21,7 @@ DURATION = {
     'tdc': 25./30
 }
 
-TIME_WINDOW = (-50, 500)
+#TIME_WINDOW = (-50, 500)
 
 ### Chamber configuration
 NCHANNELS  = 64    # channels per SL

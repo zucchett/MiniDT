@@ -38,7 +38,7 @@ SL_TEST = 2
 SL_AUX = max(SL_FITS[PHI_VIEW], key=len)
 
 # Scintillator time offset
-TIME_OFFSET_SCINT = 95.0
+TIME_OFFSET_SCINT = -95.0
 
 # Run 1209+
 TIME_OFFSET_SL = {
@@ -72,4 +72,5 @@ NHITS_LOCAL_MIN = 3
 NHITS_LOCAL_MAX = 20
 
 # Trigger
+TRIGGER_CELL = 0
 TRIGGER_CELL_OFFSET = 3
