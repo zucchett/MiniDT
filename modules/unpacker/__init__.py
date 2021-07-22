@@ -19,7 +19,7 @@ class Unpacker:
             word = inputfile.read(self.num_words*self.word_size)
             
             if word and len(word) == self.num_words*self.word_size:
-                d = self.unpacker_nnt(word)
+                d = self.unpacker_v3(word)
                 if not (skipFlush and word_count < self.num_words_transfer): dt += d
                 word_count += 1
 
@@ -45,7 +45,7 @@ class Unpacker:
         return rows
 
 
-    def unpacker_nnt(self, hit):
+    def unpacker_v2(self, hit):
         
         rows = []
         
@@ -62,6 +62,25 @@ class Unpacker:
 
             elif head == 4 or head == 5:
                 rows.append(self.param_unpacker_v2(buffer))
+            
+        return rows
+        
+    
+    def unpacker_v3(self, hit):
+        
+        rows = []
+        
+        for i in range(0, self.num_words*self.word_size, self.word_size):
+            
+            buffer = struct.unpack('<Q', hit[i:i+self.word_size])[0]
+            head = (buffer >> 61) & 0x7
+            
+            if head == 2:
+                rows.append(self.hit_unpacker_v2(buffer))
+            elif head == 0:
+                rows.append(self.eq_unpacker_v3(buffer))
+            elif head == 4 or head == 5:
+                rows.append(self.param_unpacker_v3(buffer))
             
         return rows
 
@@ -98,8 +117,7 @@ class Unpacker:
             'TDC_CHANNEL': TDC_CHANNEL,
             'ORBIT_CNT': ORBIT_CNT,
             'BX_COUNTER': BX_COUNTER,
-            'TDC_MEAS': TDC_MEAS,
-            'TRG_QUALITY': np.NaN
+            'TDC_MEAS': TDC_MEAS - 1,
         }
         
         return unpacked #Row(**unpacked)
@@ -134,8 +152,7 @@ class Unpacker:
             'TDC_CHANNEL': TDC_CHANNEL,
             'ORBIT_CNT': ORBIT_CNT,
             'BX_COUNTER': BX_COUNTER,
-            'TDC_MEAS': TDC_MEAS,
-            'PARAM' : np.NaN,
+            'TDC_MEAS': TDC_MEAS - 1,
         }
         
         return unpacked #Row(**unpacked)
@@ -209,12 +226,47 @@ class Unpacker:
             'TDC_CHANNEL': TDC_CHANNEL,
             'ORBIT_CNT': ORBIT_CNT,
             'BX_COUNTER': BX_COUNTER,
-            'TDC_MEAS': TDC_MEAS,
-            'PARAM' : np.NaN,
+            'TDC_MEAS': TDC_MEAS - 1,
         }
         
         return unpacked #Row(**unpacked)
 
+    def eq_unpacker_v3(self, word):
+        # EQ-hits masks
+        emaskMACROCELL    = 0xF
+        emaskTDC0         = 0x1F
+        emaskBX0          = 0xFFF
+        emaskEQ_LABEL     = 0x1F
+        emaskTRIG_ORBIT    = 0xFFFFFFFF
+        emaskFPGA         = 0x7
+        emaskHEAD         = 0x7
+
+        efirstMACROCELL   = 54
+        efirstTDC0        = 5
+        efirstBX0         = 10
+        efirstEQ_LABEL    = 0
+        efirstTRIG_ORBIT  = 22
+        efirstFPGA        = 58
+        efirstHEAD        = 61
+
+        MACROCELL    =      int(( word >> efirstMACROCELL   ) & emaskMACROCELL  )
+        TDC0         =      int(( word >> efirstTDC0        ) & emaskTDC0       )
+        BX0          =      int(( word >> efirstBX0         ) & emaskBX0        )
+        EQ_LABEL     =      int(( word >> efirstEQ_LABEL    ) & emaskEQ_LABEL   )
+        TRIG_ORBIT   =      int(( word >> efirstTRIG_ORBIT  ) & emaskTRIG_ORBIT )
+        FPGA         =      int(( word >> efirstFPGA        ) & emaskFPGA       )
+        HEAD         =      int(( word >> efirstHEAD        ) & emaskHEAD       )
+        
+        unpacked  = {
+            'HEAD': HEAD,
+            'FPGA': FPGA,
+            'TDC_CHANNEL': MACROCELL,
+            'ORBIT_CNT': TRIG_ORBIT,
+            'BX_COUNTER': BX0,
+            'TDC_MEAS': TDC0 - 1,
+        }
+        
+        return unpacked #Row(**unpacked)
 
 
     def param_unpacker_v1(self, word):
@@ -239,8 +291,7 @@ class Unpacker:
             'TDC_CHANNEL': 0,
             'ORBIT_CNT': 0,
             'BX_COUNTER': 0,
-            'TDC_MEAS': 0,
-            'PARAM': PARAM,
+            'TDC_MEAS': VALUE,
         }
         
         return unpacked #Row(**unpacked)
@@ -272,8 +323,66 @@ class Unpacker:
             'TDC_CHANNEL': 0,
             'ORBIT_CNT': ORBIT_CNT,
             'BX_COUNTER': 0,
-            'TDC_MEAS': 0,
-            'PARAM': VALUE,
+            'TDC_MEAS': VALUE,
         }
         
         return unpacked #Row(**unpacked)
+
+
+
+    def param_unpacker_v3(self, word):
+        # hit masks
+        pmaskHEAD         = 0x7
+        pmaskFPGA         = 0x7
+        pmaskMACROCELL    = 0xF
+        pmaskORBIT_CNT    = 0xFFFFFFFF
+        pmaskVALUE        = 0xFFFF
+
+        pfirstHEAD        = 61
+        pfirstFPGA        = 58
+        pfirstMACROCELL   = 54
+        pfirstORBIT_CNT   = 22
+        pfirstVALUE       = 0
+        
+        FPVALUE      =      int(( word >> pfirstVALUE    ) & pmaskVALUE     )
+        ORBIT_CNT    =      int(( word >> pfirstORBIT_CNT) & pmaskORBIT_CNT )
+        MACROCELL    =      int(( word >> pfirstMACROCELL) & pmaskMACROCELL )
+        FPGA         =      int(( word >> pfirstFPGA     ) & pmaskFPGA      )
+        HEAD         =      int(( word >> pfirstHEAD     ) & pmaskHEAD      )
+        
+        VALUE = 0.
+        if HEAD == 4: VALUE = self.float_16_2(FPVALUE)
+        elif HEAD == 5: VALUE = self.float_16_8(FPVALUE)
+        
+        unpacked  = {
+            'HEAD': HEAD,
+            'FPGA': FPGA,
+            'TDC_CHANNEL': MACROCELL,
+            'ORBIT_CNT': ORBIT_CNT,
+            'BX_COUNTER': 0,
+            'TDC_MEAS': VALUE,
+        }
+    
+        return unpacked #Row(**unpacked)
+    
+    
+    def float_16_2(self, x):
+        sign = (x >> 15) & 0x1
+        rest = x & 0x7FFF
+        if sign > 0: rest = (~rest + 1) & 0x7FFF
+        inte = float((rest & 0x4000) >> 14)
+        deci = float(rest & 0x3FFF) / (2**14)
+        fp = inte + deci
+        if sign > 0: fp *= -1
+        return fp
+    
+    def float_16_8(self, x):
+        sign = (x >> 15) & 0x1
+        rest = x & 0x7FFF
+        if sign > 0: rest = (~rest + 1) & 0x7FFF
+        inte = float((rest & 0x7F00) >> 8)
+        deci = float(rest & 0x00FF) / (2**8)
+        fp = inte + deci
+        if sign > 0: fp *= -1
+        return fp
+    
