@@ -11,6 +11,88 @@ class Unpacker:
         self.word_size = 8 # one 64-bit word
         self.num_words = 128 + 1 # 1 DMA data transfer = 1 kB = 1024 B = 128 words (hits)
         self.num_words_transfer = 1024
+        
+        # Hits
+        self.hmaskHEAD         = 0x7
+        self.hmaskHEADv1       = 0x3
+        self.hmaskFPGA         = 0x7
+        self.hmaskFPGAv1       = 0xF
+        self.hmaskTDC_CHANNEL  = 0x1FF
+        self.hmaskORBIT_CNT    = 0xFFFFFFFF
+        self.hmaskBX_COUNTER   = 0xFFF
+        self.hmaskTDC_MEAS     = 0x1F
+        
+        # Trigger
+        self.tmaskHEAD         = 0xC000000000000000
+        self.tmaskSL           = 0x3000000000000000
+        self.tmaskMCELL        = 0x0E00000000000000
+        self.tmaskTAGORB       = 0x01FFFFFFFE000000
+        self.tmaskTAGBX        = 0x0000000001FFE000
+        self.tmaskBX           = 0x0000000000001FFE
+        self.tmaskQUAL         = 0x0000000000000001
+
+        # Equations
+        self.emaskHEAD         = 0x7
+        self.emaskFPGA         = 0x7
+        self.emaskTRIG_ORBIT   = 0xFFFFFFFF
+        self.emaskORBIT_CNT    = 0xFFFFFFFF
+        self.emaskBX_COUNTER   = 0xFFF
+        self.emaskBX0          = 0xFFF
+        self.emaskEQ_LABEL     = 0x1F
+        self.emaskMACROCELL    = 0xF
+        self.emaskTDC_MEAS     = 0x1F
+        self.emaskTDC0         = 0x1F
+        
+        # Parameters
+        self.pmaskHEAD         = 0x7
+        self.pmaskFPGA         = 0x7
+        self.pmaskMACROCELL    = 0xF
+        self.pmaskORBIT_CNT    = 0xFFFFFFFF
+        self.pmaskVALUE        = 0xFFFF
+        self.pmaskVALUEv1      = 0xFFFFFFFF
+        
+        
+        ### SHIFTS
+        
+        # Hits
+        self.hfirstHEAD        = 61
+        self.hfirstHEADv1      = 62
+        self.hfirstFPGA        = 58
+        self.hfirstFPGAv1      = 58
+        self.hfirstTDC_CHANNEL = 49
+        self.hfirstORBIT_CNT   = 17
+        self.hfirstBX_COUNTER  = 5
+        self.hfirstTDC_MEAS    = 0
+        
+        # Trigger
+        self.tfirstHEAD        = 62
+        self.tfirstSL          = 60
+        self.tfirstMCELL       = 57
+        self.tfirstTAGORB      = 25
+        self.tfirstTAGBX       = 13
+        self.tfirstBX          = 1
+        self.tfirstQUAL        = 0
+        
+        # Equations
+        self.efirstHEAD        = 61
+        self.efirstFPGA        = 58
+        self.efirstTRIG_ORBIT  = 22
+        self.efirstORBIT_CNT   = 24
+        self.efirstBX_COUNTER  = 12
+        self.efirstBX0         = 10
+        self.efirstEQ_LABEL    = 0
+        self.efirstMACROCELL   = 54
+        self.efirstTDC_MEAS    = 7
+        self.efirstTDC0        = 5
+
+        # Parameters
+        self.pfirstHEAD        = 61
+        self.pfirstFPGA        = 58
+        self.pfirstMACROCELL   = 54
+        self.pfirstORBIT_CNT   = 22
+        self.pfirstORBIT_CNTv2 = 24
+        self.pfirstVALUE       = 0
+        
 
     def unpack(self, inputfile, maxwords=-1, skipFlush=False):
         dt = []
@@ -86,27 +168,26 @@ class Unpacker:
 
 
     def hit_unpacker_v1(self, word):
-        # hit masks
-        hmaskTDC_MEAS     = 0x1F
-        hmaskBX_COUNTER   = 0xFFF
-        hmaskORBIT_CNT    = 0xFFFFFFFF
-        hmaskTDC_CHANNEL  = 0x1FF
-        hmaskFPGA         = 0xF
-        hmaskHEAD         = 0x3
+        #hmaskTDC_MEAS     = 0x1F
+        #hmaskBX_COUNTER   = 0xFFF
+        #hmaskORBIT_CNT    = 0xFFFFFFFF
+        #hmaskTDC_CHANNEL  = 0x1FF
+        #hmaskFPGA         = 0xF
+        #hmaskHEAD         = 0x3
 
-        hfirstTDC_MEAS    = 0
-        hfirstBX_COUNTER  = 5
-        hfirstORBIT_CNT   = 17
-        hfirstTDC_CHANNEL = 49
-        hfirstFPGA        = 58
-        hfirstHEAD        = 62
+        #hfirstTDC_MEAS    = 0
+        #hfirstBX_COUNTER  = 5
+        #hfirstORBIT_CNT   = 17
+        #hfirstTDC_CHANNEL = 49
+        #hfirstFPGA        = 58
+        #hfirstHEAD        = 62
         
-        TDC_MEAS     =      int(( word >> hfirstTDC_MEAS    ) & hmaskTDC_MEAS   )
-        BX_COUNTER   =      int(( word >> hfirstBX_COUNTER  ) & hmaskBX_COUNTER )
-        ORBIT_CNT    =      int(( word >> hfirstORBIT_CNT   ) & hmaskORBIT_CNT  )
-        TDC_CHANNEL  =      int(( word >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL)
-        FPGA         =      int(( word >> hfirstFPGA        ) & hmaskFPGA       )
-        HEAD         =      int(( word >> hfirstHEAD        ) & hmaskHEAD       )
+        TDC_MEAS     =      int(( word >> self.hfirstTDC_MEAS    ) & self.hmaskTDC_MEAS   )
+        BX_COUNTER   =      int(( word >> self.hfirstBX_COUNTER  ) & self.hmaskBX_COUNTER )
+        ORBIT_CNT    =      int(( word >> self.hfirstORBIT_CNT   ) & self.hmaskORBIT_CNT  )
+        TDC_CHANNEL  =      int(( word >> self.hfirstTDC_CHANNEL ) & self.hmaskTDC_CHANNEL)
+        FPGA         =      int(( word >> self.hfirstFPGAv1      ) & self.hmaskFPGAv1     )
+        HEAD         =      int(( word >> self.hfirstHEADv1      ) & self.hmaskHEADv1     )
         
         #if((TDC_CHANNEL!=137) and (TDC_CHANNEL!=138)):
         #    TDC_MEAS -= 1
@@ -124,27 +205,26 @@ class Unpacker:
 
 
     def hit_unpacker_v2(self, word):
-        # hit masks
-        hmaskTDC_MEAS     = 0x1F
-        hmaskBX_COUNTER   = 0xFFF
-        hmaskORBIT_CNT    = 0xFFFFFFFF
-        hmaskTDC_CHANNEL  = 0x1FF
-        hmaskFPGA         = 0x7
-        hmaskHEAD         = 0x7
+        #hmaskTDC_MEAS     = 0x1F
+        #hmaskBX_COUNTER   = 0xFFF
+        #hmaskORBIT_CNT    = 0xFFFFFFFF
+        #hmaskTDC_CHANNEL  = 0x1FF
+        #hmaskFPGA         = 0x7
+        #hmaskHEAD         = 0x7
 
-        hfirstTDC_MEAS    = 0
-        hfirstBX_COUNTER  = 5
-        hfirstORBIT_CNT   = 17
-        hfirstTDC_CHANNEL = 49
-        hfirstFPGA        = 58
-        hfirstHEAD        = 61
+        #hfirstTDC_MEAS    = 0
+        #hfirstBX_COUNTER  = 5
+        #hfirstORBIT_CNT   = 17
+        #hfirstTDC_CHANNEL = 49
+        #hfirstFPGA        = 58
+        #hfirstHEAD        = 61
         
-        TDC_MEAS     =      int(( word >> hfirstTDC_MEAS    ) & hmaskTDC_MEAS   )
-        BX_COUNTER   =      int(( word >> hfirstBX_COUNTER  ) & hmaskBX_COUNTER )
-        ORBIT_CNT    =      int(( word >> hfirstORBIT_CNT   ) & hmaskORBIT_CNT  )
-        TDC_CHANNEL  =      int(( word >> hfirstTDC_CHANNEL ) & hmaskTDC_CHANNEL)
-        FPGA         =      int(( word >> hfirstFPGA        ) & hmaskFPGA       )
-        HEAD         =      int(( word >> hfirstHEAD        ) & hmaskHEAD       )
+        TDC_MEAS     =      int(( word >> self.hfirstTDC_MEAS    ) & self.hmaskTDC_MEAS   )
+        BX_COUNTER   =      int(( word >> self.hfirstBX_COUNTER  ) & self.hmaskBX_COUNTER )
+        ORBIT_CNT    =      int(( word >> self.hfirstORBIT_CNT   ) & self.hmaskORBIT_CNT  )
+        TDC_CHANNEL  =      int(( word >> self.hfirstTDC_CHANNEL ) & self.hmaskTDC_CHANNEL)
+        FPGA         =      int(( word >> self.hfirstFPGA        ) & self.hmaskFPGA       )
+        HEAD         =      int(( word >> self.hfirstHEAD        ) & self.hmaskHEAD       )
 
         unpacked  = {
             'HEAD': HEAD,
@@ -159,30 +239,29 @@ class Unpacker:
 
 
     def trigger_unpacker(self, word):
-        # Trigger masks
-        tmaskQUAL    = 0x0000000000000001
-        tmaskBX      = 0x0000000000001FFE
-        tmaskTAGBX   = 0x0000000001FFE000
-        tmaskTAGORB  = 0x01FFFFFFFE000000
-        tmaskMCELL   = 0x0E00000000000000
-        tmaskSL      = 0x3000000000000000
-        tmaskHEAD    = 0xC000000000000000
+        #tmaskQUAL    = 0x0000000000000001
+        #tmaskBX      = 0x0000000000001FFE
+        #tmaskTAGBX   = 0x0000000001FFE000
+        #tmaskTAGORB  = 0x01FFFFFFFE000000
+        #tmaskMCELL   = 0x0E00000000000000
+        #tmaskSL      = 0x3000000000000000
+        #tmaskHEAD    = 0xC000000000000000
 
-        tfirstQUAL   = 0
-        tfirstBX     = 1
-        tfirstTAGBX  = 13
-        tfirstTAGORB = 25
-        tfirstMCELL  = 57
-        tfirstSL     = 60
-        tfirstHEAD   = 62
+        #tfirstQUAL   = 0
+        #tfirstBX     = 1
+        #tfirstTAGBX  = 13
+        #tfirstTAGORB = 25
+        #tfirstMCELL  = 57
+        #tfirstSL     = 60
+        #tfirstHEAD   = 62
         
-        storedTrigHead     = int(( word & tmaskHEAD   ) >> tfirstHEAD  )
-        storedTrigMiniCh   = int(( word & tmaskSL     ) >> tfirstSL    )
-        storedTrigMCell    = int(( word & tmaskMCELL  ) >> tfirstMCELL )
-        storedTrigTagOrbit = int(( word & tmaskTAGORB ) >> tfirstTAGORB)
-        storedTrigTagBX    = int(( word & tmaskTAGBX  ) >> tfirstTAGBX )
-        storedTrigBX       = int(( word & tmaskBX     ) >> tfirstBX    )
-        storedTrigQual     = int(( word & tmaskQUAL   ) >> tfirstQUAL  )
+        storedTrigHead     = int(( word & self.tmaskHEAD   ) >> self.tfirstHEAD  )
+        storedTrigMiniCh   = int(( word & self.tmaskSL     ) >> self.tfirstSL    )
+        storedTrigMCell    = int(( word & self.tmaskMCELL  ) >> self.tfirstMCELL )
+        storedTrigTagOrbit = int(( word & self.tmaskTAGORB ) >> self.tfirstTAGORB)
+        storedTrigTagBX    = int(( word & self.tmaskTAGBX  ) >> self.tfirstTAGBX )
+        storedTrigBX       = int(( word & self.tmaskBX     ) >> self.tfirstBX    )
+        storedTrigQual     = int(( word & self.tmaskQUAL   ) >> self.tfirstQUAL  )
         
         unpacked = {
             'HEAD': storedTrigHead,
@@ -198,27 +277,26 @@ class Unpacker:
 
 
     def eq_unpacker(self, word):
-        # EQ-hits masks
-        emaskEQ_LABEL     = 0x1F
-        emaskTDC_MEAS     = 0x1F
-        emaskBX_COUNTER   = 0xFFF
-        emaskORBIT_CNT    = 0xFFFFFFFF
-        emaskFPGA         = 0x7
-        emaskHEAD         = 0x7
+        #emaskEQ_LABEL     = 0x1F
+        #emaskTDC_MEAS     = 0x1F
+        #emaskBX_COUNTER   = 0xFFF
+        #emaskORBIT_CNT    = 0xFFFFFFFF
+        #emaskFPGA         = 0x7
+        #emaskHEAD         = 0x7
 
-        efirstEQ_LABEL    = 0
-        efirstTDC_MEAS    = 7
-        efirstBX_COUNTER  = 12
-        efirstORBIT_CNT   = 24
-        efirstFPGA        = 58
-        efirstHEAD        = 61
+        #efirstEQ_LABEL    = 0
+        #efirstTDC_MEAS    = 7
+        #efirstBX_COUNTER  = 12
+        #efirstORBIT_CNT   = 24
+        #efirstFPGA        = 58
+        #efirstHEAD        = 61
 
-        TDC_MEAS     =      int(( word >> efirstTDC_MEAS    ) & emaskTDC_MEAS   )
-        BX_COUNTER   =      int(( word >> efirstBX_COUNTER  ) & emaskBX_COUNTER )
-        ORBIT_CNT    =      int(( word >> efirstORBIT_CNT   ) & emaskORBIT_CNT  )
-        TDC_CHANNEL  =      int(( word >> efirstTDC_MEAS    ) & emaskTDC_MEAS   )
-        FPGA         =      int(( word >> efirstFPGA        ) & emaskFPGA       )
-        HEAD         =      int(( word >> efirstHEAD        ) & emaskHEAD       )
+        TDC_MEAS     =      int(( word >> self.efirstTDC_MEAS    ) & self.emaskTDC_MEAS   )
+        BX_COUNTER   =      int(( word >> self.efirstBX_COUNTER  ) & self.emaskBX_COUNTER )
+        ORBIT_CNT    =      int(( word >> self.efirstORBIT_CNT   ) & self.emaskORBIT_CNT  )
+        TDC_CHANNEL  =      int(( word >> self.efirstTDC_MEAS    ) & self.emaskTDC_MEAS   )
+        FPGA         =      int(( word >> self.efirstFPGA        ) & self.emaskFPGA       )
+        HEAD         =      int(( word >> self.efirstHEAD        ) & self.emaskHEAD       )
 
         unpacked  = {
             'HEAD': HEAD,
@@ -232,30 +310,29 @@ class Unpacker:
         return unpacked #Row(**unpacked)
 
     def eq_unpacker_v3(self, word):
-        # EQ-hits masks
-        emaskMACROCELL    = 0xF
-        emaskTDC0         = 0x1F
-        emaskBX0          = 0xFFF
-        emaskEQ_LABEL     = 0x1F
-        emaskTRIG_ORBIT    = 0xFFFFFFFF
-        emaskFPGA         = 0x7
-        emaskHEAD         = 0x7
+        #emaskMACROCELL    = 0xF
+        #emaskTDC0         = 0x1F
+        #emaskBX0          = 0xFFF
+        #emaskEQ_LABEL     = 0x1F
+        #emaskTRIG_ORBIT    = 0xFFFFFFFF
+        #emaskFPGA         = 0x7
+        #emaskHEAD         = 0x7
 
-        efirstMACROCELL   = 54
-        efirstTDC0        = 5
-        efirstBX0         = 10
-        efirstEQ_LABEL    = 0
-        efirstTRIG_ORBIT  = 22
-        efirstFPGA        = 58
-        efirstHEAD        = 61
+        #efirstMACROCELL   = 54
+        #efirstTDC0        = 5
+        #efirstBX0         = 10
+        #efirstEQ_LABEL    = 0
+        #efirstTRIG_ORBIT  = 22
+        #efirstFPGA        = 58
+        #efirstHEAD        = 61
 
-        MACROCELL    =      int(( word >> efirstMACROCELL   ) & emaskMACROCELL  )
-        TDC0         =      int(( word >> efirstTDC0        ) & emaskTDC0       )
-        BX0          =      int(( word >> efirstBX0         ) & emaskBX0        )
-        EQ_LABEL     =      int(( word >> efirstEQ_LABEL    ) & emaskEQ_LABEL   )
-        TRIG_ORBIT   =      int(( word >> efirstTRIG_ORBIT  ) & emaskTRIG_ORBIT )
-        FPGA         =      int(( word >> efirstFPGA        ) & emaskFPGA       )
-        HEAD         =      int(( word >> efirstHEAD        ) & emaskHEAD       )
+        MACROCELL    =      int(( word >> self.efirstMACROCELL   ) & self.emaskMACROCELL  )
+        TDC0         =      int(( word >> self.efirstTDC0        ) & self.emaskTDC0       )
+        BX0          =      int(( word >> self.efirstBX0         ) & self.emaskBX0        )
+        EQ_LABEL     =      int(( word >> self.efirstEQ_LABEL    ) & self.emaskEQ_LABEL   )
+        TRIG_ORBIT   =      int(( word >> self.efirstTRIG_ORBIT  ) & self.emaskTRIG_ORBIT )
+        FPGA         =      int(( word >> self.efirstFPGA        ) & self.emaskFPGA       )
+        HEAD         =      int(( word >> self.efirstHEAD        ) & self.emaskHEAD       )
         
         unpacked  = {
             'HEAD': HEAD,
@@ -270,18 +347,17 @@ class Unpacker:
 
 
     def param_unpacker_v1(self, word):
-        # hit masks
-        pmaskHEAD         = 0x7
-        pmaskFPGA         = 0x7
-        pmaskPARAM        = 0xFFFFFFFF
+        #pmaskHEAD         = 0x7
+        #pmaskFPGA         = 0x7
+        #pmaskVALUE        = 0xFFFFFFFF
 
-        pfirstHEAD        = 61
-        pfirstFPGA        = 58
-        pfirstPARAM       = 0
+        #pfirstHEAD        = 61
+        #pfirstFPGA        = 58
+        #pfirstVALUE       = 0
         
-        PARAMINT     =      int(( word >> pfirstPARAM    ) & pmaskPARAM   )
-        FPGA         =      int(( word >> pfirstFPGA     ) & pmaskFPGA    )
-        HEAD         =      int(( word >> pfirstHEAD     ) & pmaskHEAD    )
+        PARAMINT     =      int(( word >> self.pfirstVALUE    ) & self.pmaskVALUEv1   )
+        FPGA         =      int(( word >> self.pfirstFPGA     ) & self.pmaskFPGA    )
+        HEAD         =      int(( word >> self.pfirstHEAD     ) & self.pmaskHEAD    )
 
         PARAM = struct.unpack('!f', struct.pack('!I', PARAMINT))[0] # Equivalent to the C code: float fvalue = *(float*)&value;
         
@@ -299,21 +375,20 @@ class Unpacker:
 
 
     def param_unpacker_v2(self, word):
-        # hit masks
-        pmaskHEAD         = 0x7
-        pmaskFPGA         = 0x7
-        pmaskORBIT_CNT    = 0xFFFFFFFF
-        pmaskVALUE        = 0xFFFF
+        #pmaskHEAD         = 0x7
+        #pmaskFPGA         = 0x7
+        #pmaskORBIT_CNT    = 0xFFFFFFFF
+        #pmaskVALUE        = 0xFFFF
 
-        pfirstHEAD        = 61
-        pfirstFPGA        = 58
-        pfirstORBIT_CNT   = 24
-        pfirstVALUE       = 0
+        #pfirstHEAD        = 61
+        #pfirstFPGA        = 58
+        #pfirstORBIT_CNT   = 24
+        #pfirstVALUE       = 0
         
-        VALUEINT     =      int(( word >> pfirstVALUE    ) & pmaskVALUE     )
-        ORBIT_CNT    =      int(( word >> pfirstORBIT_CNT) & pmaskORBIT_CNT )
-        FPGA         =      int(( word >> pfirstFPGA     ) & pmaskFPGA      )
-        HEAD         =      int(( word >> pfirstHEAD     ) & pmaskHEAD      )
+        VALUEINT     =      int(( word >> self.pfirstVALUE      ) & self.pmaskVALUE     )
+        ORBIT_CNT    =      int(( word >> self.pfirstORBIT_CNTv2) & self.pmaskORBIT_CNT )
+        FPGA         =      int(( word >> self.pfirstFPGA       ) & self.pmaskFPGA      )
+        HEAD         =      int(( word >> self.pfirstHEAD       ) & self.pmaskHEAD      )
         
         VALUE = struct.unpack('!e', struct.pack('!H', VALUEINT))[0] # Equivalent to the C code: float fvalue = *(float*)&value;
         
@@ -331,24 +406,23 @@ class Unpacker:
 
 
     def param_unpacker_v3(self, word):
-        # hit masks
-        pmaskHEAD         = 0x7
-        pmaskFPGA         = 0x7
-        pmaskMACROCELL    = 0xF
-        pmaskORBIT_CNT    = 0xFFFFFFFF
-        pmaskVALUE        = 0xFFFF
+        #pmaskHEAD         = 0x7
+        #pmaskFPGA         = 0x7
+        #pmaskMACROCELL    = 0xF
+        #pmaskORBIT_CNT    = 0xFFFFFFFF
+        #pmaskVALUE        = 0xFFFF
 
-        pfirstHEAD        = 61
-        pfirstFPGA        = 58
-        pfirstMACROCELL   = 54
-        pfirstORBIT_CNT   = 22
-        pfirstVALUE       = 0
+        #pfirstHEAD        = 61
+        #pfirstFPGA        = 58
+        #pfirstMACROCELL   = 54
+        #pfirstORBIT_CNT   = 22
+        #pfirstVALUE       = 0
         
-        FPVALUE      =      int(( word >> pfirstVALUE    ) & pmaskVALUE     )
-        ORBIT_CNT    =      int(( word >> pfirstORBIT_CNT) & pmaskORBIT_CNT )
-        MACROCELL    =      int(( word >> pfirstMACROCELL) & pmaskMACROCELL )
-        FPGA         =      int(( word >> pfirstFPGA     ) & pmaskFPGA      )
-        HEAD         =      int(( word >> pfirstHEAD     ) & pmaskHEAD      )
+        FPVALUE      =      int(( word >> self.pfirstVALUE    ) & self.pmaskVALUE     )
+        ORBIT_CNT    =      int(( word >> self.pfirstORBIT_CNT) & self.pmaskORBIT_CNT )
+        MACROCELL    =      int(( word >> self.pfirstMACROCELL) & self.pmaskMACROCELL )
+        FPGA         =      int(( word >> self.pfirstFPGA     ) & self.pmaskFPGA      )
+        HEAD         =      int(( word >> self.pfirstHEAD     ) & self.pmaskHEAD      )
         
         VALUE = 0.
         if HEAD == 4: VALUE = self.float_16_2(FPVALUE)

@@ -5,7 +5,7 @@ import itertools
 import scipy.optimize as opt
 #import numba as nb
 
-
+RES = 0.250
 
 # Swap x and z, as the dominating uncertainty is on x
 
@@ -49,7 +49,8 @@ def fitFast(x, y):
     ova = (ysum - ovb * xsum) / n
     if ovb == 0.: return 0., 0., 999.
     f = ovb * x + ova
-    chi2 = ((f - y)**2 ).sum() / (n - 1)
+    #chi2 = ((f - y)**2 ).sum() / (n - 1)
+    chi2 = (((f - y)/RES)**2 ).sum() / (n - 1)
     b, a = 1./ovb, -ova/ovb
     return b, a, chi2
 
@@ -65,19 +66,26 @@ def fit3D(x_wire, x_drift, x_label, y):
     ova = (ysum - ovb * xsum) / n
     if ovb == 0.: ovb = 1.e9
     f = ovb * x + ova
-    chi2 = ((f - y)**2 ).sum() / (n - 1)
+    #chi2 = ((f - y)**2 ).sum() / (n - 1)
+    chi2 = (((f - y)/RES)**2 ).sum() / (n - 1)
     
     # Nested function
     def chiSquare3D(args):
         _ovb, _ova, _dy = args
         _f = _ovb * x + _ova
-        _y = y_wire + y_label * (y_drift + _dy)
-        chi2 = ( (_f - _y)**2 ).sum() / (n - 1)
+        dy = np.full(shape=len(y_drift), fill_value=_dy, dtype=np.float)
+        #hc = np.full(shape=len(y_drift), fill_value=21., dtype=np.float)
+        d = y_drift + dy
+        d[d < 0.] = 0.
+        d[d > 21.] = 21.
+        _y = y_wire + y_label * d
+        #chi2 = ( (_f - _y)**2 ).sum() / (n - 1)
+        chi2 = (((_f - _y)/RES)**2 ).sum() / (n - 1)
         return chi2
     
     x0 = np.array([ovb, ova, 0.])
     bnds = None #((None, None), (None, None), (0, 21.))
-    result =  opt.minimize(chiSquare3D, x0, bounds=bnds)
+    result =  opt.minimize(chiSquare3D, x0, method='Nelder-Mead', bounds=bnds)
     fovb, fova, fdy = result['x']
     fchi2 = result['fun']
     
@@ -93,7 +101,7 @@ def fit3D(x_wire, x_drift, x_label, y):
     # Re-rotate back to normal reference system and prepare output
     b, a = 1./ovb, -ova/ovb
     
-    if not result['status'] == 0: return 0., 0., 999., 999.
+    if not result['success']: return 0., 0., 999., 999.
     return b, a, fchi2, fdy
 
 ### -------------------------------------------

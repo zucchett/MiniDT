@@ -3,10 +3,10 @@
 from bokeh.plotting import figure
 from pdb import set_trace as br
 from modules.geometry import DTYPE_COOR
-
+from modules.reco import config_3_1 as config 
 import numpy as np
 
-PLOT_RANGE = {'x': (-400, 400), 'y': (0, 2000)}
+#PLOT_RANGE = {'x': (-400, 400), 'y': (0, 2000)}
 
 def book_chambers_figure(geo):
     """Book figures for plotting the hits inside chambers"""
@@ -39,12 +39,12 @@ def book_global_figure(geo, sls):
     """Book figures for plotting global hit positions in two orthogonal planes"""
     figs = {}
     figs['xz'] = figure(plot_width=750, plot_height=780,
-                        x_range=PLOT_RANGE['x'], y_range=PLOT_RANGE['y'],
+                        x_range=config.PLOT_RANGE['x'], y_range=config.PLOT_RANGE['y'],
                         title="Global XZ",
                         x_axis_label='x (mm)',
                         y_axis_label='z (mm)')
     figs['yz'] = figure(plot_width=750, plot_height=780,
-                        x_range=PLOT_RANGE['x'], y_range=PLOT_RANGE['y'],
+                        x_range=config.PLOT_RANGE['x'], y_range=config.PLOT_RANGE['y'],
                         title="Global YZ",
                         x_axis_label='y (mm)',
                         y_axis_label='z (mm)')

@@ -85,7 +85,7 @@ class Mapping:
         #l = config.layer_z[layer - 1]
         return int(round((x - config.posshift_x[layer - 1]) / config.XCELL) + 1)
     
-    def getWirePosition(self, wire_num, layer): # Input Layer is between [1, 4]
+    def getWirePosition(self, layer, wire_num): # Input Layer is between [1, 4]
         #l = config.layer_z[layer - 1]
         return (wire_num - 1) * config.XCELL + config.posshift_x[ layer - 1 ]
 
@@ -93,9 +93,9 @@ class Mapping:
         return (wire_num - 1) * 4 + config.layer_z[ (layer - 1) % 4 ] - 1
 
     def getChannel(self, sl, layer, wire_num):
-        if sl == 0:
+        if sl % 2 == 0:
             return self.getChannelNorm(layer, wire_num)
-        elif sl == 1:
+        elif sl % 2 == 1:
             return self.getChannelNorm(layer, wire_num) + config.NCHANNELS
         else:
             return -1

@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser(description='Command line arguments')
 parser.add_argument("-a", "--all", action="store_true", default=False, dest="all", help="Plot all categories")
 parser.add_argument("-i", "--inputfile", action="store", type=str, dest="inputdir", default="./output/Run000967_csv/", help="Provide directory of the input files (csv)")
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="./output/", help="Specify output directory")
-parser.add_argument("-p", "--plot", action="store", type=str, dest="plot", default="boxes,residues,res2D,resolution,tappini,missinghits,occupancy,parameters,alignment,trigger", help="Specify plot category")
+parser.add_argument("-p", "--plot", action="store", type=str, dest="plot", default="boxes,residues,res2D,resolution,tappini,efficiency,occupancy,parameters,alignment,trigger", help="Specify plot category")
 parser.add_argument("-v", "--verbose", action="store", type=int, default=0, dest="verbose", help="Specify verbosity level")
 args = parser.parse_args()
 
@@ -237,20 +237,26 @@ hits['RESIDUES_TRACK'] = np.abs(hits['X'] - hits['X_WIRE']) - np.abs(hits['X_TRA
 hits['DIST_TRACK_WIRE'] = hits['X_TRACK'] - hits['X_WIRE']
 hits["ABS_DIST_TRACK_WIRE"] = np.abs(hits["DIST_TRACK_WIRE"])
 
+# time refit
+hits['DELTAT_REFIT_VS_SCINTPMT'] = hits['T0'] - hits['T_SCINTPMT']
+hits[hits['DELTAT_REFIT_VS_SCINTPMT'] == 0.] = np.nan
+
 #segments['M_RAD'] = np.arctan(segments['M'])
 #segments['M_RAD'] = np.where(segments['M_RAD'] < 0, segments['M_RAD'] + math.pi/2., segments['M_RAD'] - math.pi/2.)
 #segments['M_DEG'] = np.degrees(segments['M_RAD'])
 #segments['X0'] = - segments['Q'] / segments['M']
 
 # Calculate the difference between the angles of the segments in the same orbit, and report it to the hits df for further filtering
-angle_df = segments[(segments['VIEW'] == '0') & (segments['CHAMBER'].isin([str(x) for x in config.SL_VIEW[config.PHI_VIEW]]))].copy()
+angle_df = segments.loc[(segments['VIEW'] == '0') & (segments['CHAMBER'].isin([str(x) for x in config.SL_VIEW[config.PHI_VIEW]])), ['ORBIT', 'CHAMBER', 'M_DEG']].copy()
 angle_df['DELTA_ANGLE'] = angle_df.groupby('ORBIT')['M_DEG'].transform(np.ptp)
+angle_df = angle_df[angle_df['DELTA_ANGLE'] != 0]
 angle_dict = angle_df[['ORBIT', 'DELTA_ANGLE']].drop_duplicates().set_index('ORBIT').T.to_dict('records')[0] if len(angle_df) > 0 else {}
 hits['DELTA_ANGLE'] = hits['ORBIT'].map(angle_dict)
 
 # Calculate the difference between the x0 position interpolated from the track, and the one in the test layer, for further filtering
-pos_df = segments[(segments['VIEW'] == config.PHI_VIEW.upper()) & ((segments['CHAMBER'] == ",".join([str(x) for x in config.SL_AUX])) | (segments['CHAMBER'] == str(config.SL_TEST)))].copy()
-pos_df['DELTA_X0'] = pos_df.groupby('ORBIT')['X0'].transform(np.ptp)    
+pos_df = segments.loc[(segments['VIEW'] == config.PHI_VIEW.upper()) & ((segments['CHAMBER'] == ",".join([str(x) for x in config.SL_AUX])) | (segments['CHAMBER'] == str(config.SL_TEST))), ['ORBIT', 'CHAMBER', 'X0']].copy()
+pos_df['DELTA_X0'] = pos_df.groupby('ORBIT')['X0'].transform(np.ptp)
+pos_df = pos_df[pos_df['DELTA_X0'] != 0]
 pos_dict = pos_df[['ORBIT', 'DELTA_X0']].drop_duplicates().set_index('ORBIT').T.to_dict('records')[0] if len(pos_df) > 0 else {}
 hits['DELTA_X0'] = hits['ORBIT'].map(pos_dict)
 
@@ -699,36 +705,51 @@ def plotResidues2D():
 def plotResolution():
     if not os.path.exists(args.outputdir + runname + "_plots/resolution/"): os.makedirs(args.outputdir + runname + "_plots/resolution/")
     
-    # Recalculate nhits with new columns
-    #for num_hits in [0, 3, 4]: nhits[num_hits] = hits.loc[(hits['NHITS_SEG'] == num_hits)] if num_hits != 0 else hits.loc[(hits['NHITS_SEG'] > 0)]#hits.loc[(hits['NHITS_SEG'] == 3) & (hits['NHITS_SEG'] == 4)]
+    # Refit
+    refhits = pd.concat(map(pd.read_csv, glob.glob(os.path.join(args.inputdir, "residues*.csv"))))
+    if len(refhits) <= 0:
+        print("Resolution file is empty, exiting...")
+        exit()
+    
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
+    for chamber in range(4):
+        for layer in range(1, 4+1):
+            plotHist(axs[-chamber-1][layer-1], data=refhits.loc[(refhits['CHAMBER'] == chamber) & (refhits['LAYER'] == layer), 'RESIDUES_SEG'], name="Residues [SL %d, LAYER %d]" % (chamber, layer), title="|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$|", unit="mm", bins=np.arange(-2, 2, 0.05), label="$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/resolution/refit_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/resolution/refit_chamber_layer.pdf")
+    plt.close(fig)
+    
+    fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(15, 10))
+    plotHist(axs, data=refhits.loc[(refhits['CHAMBER'] > -1) & (refhits['LAYER'].isin([1, 4])), 'RESIDUES_SEG'], name="", title="|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="External layers:\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[3], markercolor=colors[3], markerstyle=markers[3])
+    plotHist(axs, data=refhits.loc[(refhits['CHAMBER'] > -1) & (refhits['LAYER'].isin([2, 3])), 'RESIDUES_SEG'], name="", title="|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="Internal layers:\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[4], markercolor=colors[4], markerstyle=markers[4])
+    plotHist(axs, data=refhits.loc[(refhits['CHAMBER'] > -1) & (refhits['LAYER'] >= -1)       , 'RESIDUES_SEG'], name="", title="|$x_{hit}$ - $x_{wire}$| - |$x_{seg}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="Combined:\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/resolution/refit_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/resolution/refit_layer.pdf")
+    plt.close(fig)
     
     fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(30, 10))
-    for num_hits in [0, 3, 4]: plotHist(axs[0], data=nhits[num_hits]['DELTA_ANGLE'].drop_duplicates(), name="$\Delta \phi$ between the segments", title="$\Delta \phi$", unit="deg", bins=np.arange(0., 10., 0.05), label="""{}""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
-    for num_hits in [0, 3, 4]: plotHist(axs[1], data=nhits[num_hits]['DELTA_X0'].drop_duplicates(), name="$\Delta x_0$ between the segments", title="$\Delta x_0$", unit="mm", bins=np.arange(0., 50., 0.5), label="""{}""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
-    for num_hits in [0, 3, 4]: plotHist(axs[2], data=nhits[num_hits]['TRACK_CHI2'].drop_duplicates(), name="$\chi^2$ / n.d.f.", title="$\chi^2$ / n.d.f.", unit="", bins=np.arange(0., 5., 0.1), label="""{}""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
+    plotHist(axs[0], data=hits['DELTA_ANGLE'].drop_duplicates(), name="$\Delta \phi$ between the segments", title="$\Delta \phi$", unit="deg", bins=np.arange(0., 10., 0.1), label=None, linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0], fit="None")
+    plotHist(axs[1], data=hits['DELTA_X0'].drop_duplicates(), name="$\Delta x_0$ between the segments", title="$\Delta x_0$", unit="mm", bins=np.arange(0., 50., 1.), label=None, linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0], fit="None")
+    plotHist(axs[2], data=hits['TRACK_CHI2'].drop_duplicates(), name="$\chi^2$ / n.d.f.", title="$\chi^2$ / n.d.f.", unit="", bins=np.arange(0., 5., 0.1), label=None, linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0], fit="None")
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/resolution/deltas.png")
     fig.savefig(args.outputdir + runname + "_plots/resolution/deltas.pdf")
     plt.close(fig)
     
+    reshits = hits[(hits['TRACK_CHI2'] > 1.)].copy() #(hits['DELTA_ANGLE'] < 1.) & (hits['DELTA_X0'] < 10.) & 
+    
     fig, axs = plt.subplots(nrows=1, ncols=1, figsize=(15, 10))
-    for num_hits in [0, 3, 4]: plotHist(axs, data=nhits[num_hits].loc[(nhits[num_hits]['CHAMBER'] == config.SL_TEST) & (nhits[num_hits]['DELTA_ANGLE'] < 2.) & (nhits[num_hits]['DELTA_X0'] < 20.) & (nhits[num_hits]['TRACK_CHI2'] < 0.5), 'RESIDUES_TRACK'], name="Global residues [SL %d]" % config.SL_TEST, title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.05), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+    plotHist(axs, data=reshits.loc[(reshits['CHAMBER'] == config.SL_TEST) & (reshits['LAYER'].isin([1, 4])), 'RESIDUES_TRACK'], name="", title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.1), label="External layers:\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[3], markercolor=colors[3], markerstyle=markers[3])
+    plotHist(axs, data=reshits.loc[(reshits['CHAMBER'] == config.SL_TEST) & (reshits['LAYER'].isin([2, 3])), 'RESIDUES_TRACK'], name="", title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.1), label="Internal layers:\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[4], markercolor=colors[4], markerstyle=markers[4])
+    plotHist(axs, data=reshits.loc[(reshits['CHAMBER'] == config.SL_TEST) & (reshits['LAYER'] >= -1)       , 'RESIDUES_TRACK'], name="", title="|$x_{hit}$ - $x_{wire}$| - |$x_{track}$ - $x_{wire}$|", unit="mm", bins=np.arange(-4., 4., 0.1), label="Combined:\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/resolution/resolution.png")
-    fig.savefig(args.outputdir + runname + "_plots/resolution/resolution.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/resolution/interpolation.png")
+    fig.savefig(args.outputdir + runname + "_plots/resolution/interpolation.pdf")
     plt.close(fig)
     
-    # Times
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(30, 20))
-    for idx, chamber in zip(iax, isl):
-        for num_hits in [0, 3, 4]:
-            t_df = segments.loc[(segments['VIEW'] == '0') & (segments['CHAMBER'] == str(chamber))] if num_hits == 0 else segments.loc[(segments['VIEW'] == '0') & (segments['CHAMBER'] == str(chamber)) & (segments['NHITS'] == num_hits)]
-            plotHist(axs[idx], data=t_df['T_SCINTPMT'] - t_df['T0'], name="Time difference [SL %d]" % chamber, title="$t_{scint} - t_{0}$", unit="ns", bins=np.arange(-25.5, 25.5, 1.), label="""{},\n$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/resolution/times.png")
-    fig.savefig(args.outputdir + runname + "_plots/resolution/times.pdf")
-    plt.close(fig)
-
+    
 
 # Tappini
 def plotTappini():
@@ -776,10 +797,10 @@ def plotTappini():
     plt.close(fig)
 
 
-# Missing hits
-def plotMissinghits():
+# Efficiency aka Missing hits
+def plotEfficiency():
     
-    if not os.path.exists(args.outputdir + runname + "_plots/missinghits/"): os.makedirs(args.outputdir + runname + "_plots/missinghits/")
+    if not os.path.exists(args.outputdir + runname + "_plots/efficiency/"): os.makedirs(args.outputdir + runname + "_plots/efficiency/")
     
     nmax = missinghits.groupby(['CHAMBER', 'WIRE', 'LAYER']).size().max()
 
@@ -788,12 +809,12 @@ def plotMissinghits():
         axs[-chamber-1].set_title("Missing hit position [SL %d]" % chamber)
         axs[-chamber-1].set_xlabel("X position (mm)")
         axs[-chamber-1].set_ylabel("Z position (mm)")
-        h = axs[-chamber-1].hist2d(missinghits.loc[missinghits['CHAMBER']==chamber, 'X'], missinghits.loc[missinghits['CHAMBER']==chamber, 'Z'], bins=[17*42, 4], range=[[-8.5*42., +8.5*42.], [-26., 26.]], vmin=0, vmax=nmax/42)
-        cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
+        h, xbins, ybins, im = axs[-chamber-1].hist2d(missinghits.loc[missinghits['CHAMBER']==chamber, 'X'], missinghits.loc[missinghits['CHAMBER']==chamber, 'Z'], bins=[17*42, 4], range=[[-8.5*42., +8.5*42.], [-26., 26.]], vmin=0, vmax=nmax/42)
+        cbar = fig.colorbar(im, ax=axs[-chamber-1], pad=0.01)
         cbar.set_label("Counts")
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_position.png")
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_position.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_position.png")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_position.pdf")
     plt.close(fig)
 
     fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 20))
@@ -807,9 +828,10 @@ def plotMissinghits():
             axs[-chamber-1][layer].set_xlim(0, 17)
             axs[-chamber-1][layer].bar(mis['WIRE'].value_counts().index, mis['WIRE'].value_counts().values)
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_wire.png")
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_wire.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_wire.png")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_wire.pdf")
     plt.close(fig)
+
 
     fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
     for chamber in range(4):
@@ -818,13 +840,14 @@ def plotMissinghits():
         axs[-chamber-1].set_xticks(range(1, 17))
         axs[-chamber-1].set_ylabel("Layer")
         axs[-chamber-1].set_yticks(range(1, 5))
-        h = axs[-chamber-1].hist2d(missinghits.loc[missinghits['CHAMBER'] == chamber, 'WIRE'], missinghits.loc[missinghits['CHAMBER'] == chamber, 'LAYER'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]], vmin=0, vmax=nmax)
-        cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
+        h, xbins, ybins, im = axs[-chamber-1].hist2d(missinghits.loc[missinghits['CHAMBER'] == chamber, 'WIRE'], missinghits.loc[missinghits['CHAMBER'] == chamber, 'LAYER'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]], vmin=0, vmax=nmax)
+        cbar = fig.colorbar(im, ax=axs[-chamber-1], pad=0.01)
         cbar.set_label("Counts")
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_cell.png")
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/missinghits_cell.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_cell.png")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_cell.pdf")
     plt.close(fig)
+
 
     nmax = hits.groupby(['CHAMBER', 'WIRE', 'LAYER']).size().max()
     fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
@@ -832,13 +855,32 @@ def plotMissinghits():
         axs[-chamber-1].set_title("Position of hits included in the fit [SL %d]" % chamber)
         axs[-chamber-1].set_xlabel("X position (mm)")
         axs[-chamber-1].set_ylabel("Z position (mm)")
-        h = axs[-chamber-1].hist2d(hits.loc[((hits['X_SEG'].notna()) & (hits['CHAMBER']==chamber)), 'X'], hits.loc[((hits['X_SEG'].notna()) & (hits['CHAMBER']==chamber)), 'Z'], bins=[17*42, 4], range=[[-8.5*42., +8.5*42.], [-26., 26.]], vmin=0, vmax=nmax/42)
-        cbar = fig.colorbar(h[3], ax=axs[-chamber-1], pad=0.01)
+        h, xbins, ybins, im = axs[-chamber-1].hist2d(hits.loc[((hits['X_SEG'].notna()) & (hits['CHAMBER']==chamber)), 'X'], hits.loc[((hits['X_SEG'].notna()) & (hits['CHAMBER']==chamber)), 'Z'], bins=[17*42, 4], range=[[-8.5*42., +8.5*42.], [-26., 26.]], vmin=0, vmax=nmax/42)
+        cbar = fig.colorbar(im, ax=axs[-chamber-1], pad=0.01)
         cbar.set_label("Counts")
     fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/segmenthits_position.png")
-    fig.savefig(args.outputdir + runname + "_plots/missinghits/segmenthits_position.pdf")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/segmenthits_position.png")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/segmenthits_position.pdf")
     plt.close(fig)
+    
+    
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
+    for chamber in range(4):
+        axs[-chamber-1].set_title("Efficiency [SL %d]" % (chamber))
+        axs[-chamber-1].set_xlabel("Wire number")
+        axs[-chamber-1].set_xticks(range(1, 17))
+        axs[-chamber-1].set_ylabel("Layer")
+        axs[-chamber-1].set_yticks(range(1, 5))
+        h, xbins, ybins, im = axs[-chamber-1].hist2d(missinghits.loc[missinghits['CHAMBER'] == chamber, 'WIRE'], missinghits.loc[missinghits['CHAMBER'] == chamber, 'LAYER'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]], vmin=0, vmax=nmax)
+        cbar = fig.colorbar(im, ax=axs[-chamber-1], pad=0.01)
+        cbar.set_label("Counts")
+        plotChannels(axs[-chamber-1], chamber, xbins, ybins)
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_cell.png")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/missinghits_cell.pdf")
+    plt.close(fig)
+
+    
     '''
     # Wire efficiency
     fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(15, 10))
@@ -874,6 +916,41 @@ def plotMissinghits():
     fig.savefig(args.outputdir + runname + "_plots/inefficiency_wire.pdf")
     plt.close(fig)
     '''
+    
+    
+    # Efficiency
+    fire = hits[hits['X_LABEL'] != 0].groupby(['CHAMBER', 'LAYER', 'WIRE'])['X_LABEL'].count().reset_index().rename(columns={'X_LABEL' : 'COUNTS'}) # count performed a random column
+    miss = missinghits.groupby(['CHAMBER', 'LAYER', 'WIRE'])['X'].count().reset_index().rename(columns={'X' : 'COUNTS'})
+    
+    fig, axs = plt.subplots(nrows=4, ncols=1, figsize=(40, 20))
+    for chamber in range(4):
+        h_fire, x_fire, y_fire = np.histogram2d(fire.loc[fire['CHAMBER'] == chamber, 'WIRE'], fire.loc[fire['CHAMBER'] == chamber, 'LAYER'], weights=fire.loc[fire['CHAMBER'] == chamber, 'COUNTS'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]])
+        h_miss, x_miss, y_miss = np.histogram2d(miss.loc[miss['CHAMBER'] == chamber, 'WIRE'], miss.loc[miss['CHAMBER'] == chamber, 'LAYER'], weights=miss.loc[miss['CHAMBER'] == chamber, 'COUNTS'], bins=[16, 4], range=[[0.5, 16.5], [0.5, 4.5]])
+        h_deno = h_fire + h_miss
+        h_eff = np.divide(h_fire, h_deno, where=(h_deno != 0))
+        h_eff[h_deno == 0] = 0
+        h_err = np.divide(h_fire * np.sqrt(h_deno) + h_deno * np.sqrt(h_fire), np.power(h_deno, 2), where=(h_deno != 0))
+
+        axs[-chamber-1].set_title("[SL %d]" % (chamber))
+        axs[-chamber-1].set_xlabel("Wire number")
+        axs[-chamber-1].set_xticks(range(1, 17))
+        axs[-chamber-1].set_ylabel("Layer")
+        axs[-chamber-1].set_yticks(range(1, 5))
+        im = axs[-chamber-1].imshow(h_eff.T, origin='lower', extent=[x_fire[0], x_fire[-1], y_fire[0], y_fire[-1]], interpolation='nearest', aspect='auto', vmin=0., vmax=1.)
+        cbar = fig.colorbar(im, ax=axs[-chamber-1], pad=0.01)
+        cbar.set_label("Efficiency")
+        #plotChannels(axs[-chamber-1], chamber, x_fire, y_fire)
+        for i in range(len(y_fire)-1):
+            for j in range(len(x_fire)-1):
+                axs[-chamber-1].text(x_fire[j]+0.5, y_fire[i]+0.5, "%.3f" % h_eff.T[i,j], color="w", ha="center", va="center", fontweight="bold")
+        
+        t_eff = h_fire.sum()/h_deno.sum()
+        print("Chamber", chamber, "overall efficiency: %.4f +- %.4f" % (t_eff, t_eff * np.sqrt(1./h_fire.sum() + 1./h_deno.sum()) ) )
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/efficiency.png")
+    fig.savefig(args.outputdir + runname + "_plots/efficiency/efficiency.pdf")
+    plt.close(fig)
+    
 
 
 # Occupancy
@@ -984,6 +1061,7 @@ def plotParameters():
         axs[(2, w)].set_ylabel("Counts")
         axs[(2, w)].hist(tracks.loc[(tracks['VIEW'] == view), 'CHI2'], bins=chi2bins)
         axs[(2, w)].set_xscale("log")
+        print("View %s chi2 mean: %.2f" % (view, tracks.loc[(tracks['VIEW'] == view), 'CHI2'].mean()))
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/parameters/chi2.png")
     fig.savefig(args.outputdir + runname + "_plots/parameters/chi2.pdf")
@@ -1071,15 +1149,15 @@ def plotAlignment():
     plt.close(fig)
     
     # Delta parameters
-    fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(40, 30))
-    for i, p in enumerate(['M_DEG', 'Q', 'X0']):
-        for j, chamber in enumerate(config.SL_VIEW[config.PHI_VIEW]):
-            for num_hits in [0]:
-                plotHist(axs[i][chamber], data=segments.loc[segments['CHAMBER'] == chamber, p], name="Segments %s [SL %d]" % (p, chamber), title=parlabel[p], unit=parunits[p], bins=parbins[p], label="3/4 + 4/4", linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
-    fig.tight_layout()
-    fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.png")
-    fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.pdf")
-    plt.close(fig)
+    #fig, axs = plt.subplots(nrows=3, ncols=4, figsize=(40, 30))
+    #for i, p in enumerate(['M_DEG', 'Q', 'X0']):
+    #    for j, chamber in enumerate(config.SL_VIEW[config.PHI_VIEW]):
+    #        for num_hits in [0]:
+    #            plotHist(axs[i][chamber], data=segments.loc[segments['CHAMBER'] == str(chamber), p], name="Segments %s [SL %d]" % (p, chamber), title=parlabel[p], unit=parunits[p], bins=parbins[p], label="3/4 + 4/4", linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits], fit="None")
+    #fig.tight_layout()
+    #fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.png")
+    #fig.savefig(args.outputdir + runname + "_plots/alignment/segment_delta_par.pdf")
+    #plt.close(fig)
     
 
 
@@ -1232,6 +1310,9 @@ def plotTimes():
     times['DELTAT_SCINTAND_VS_SCINTPMT'] = times['T_SCINTAND'] - times['T_SCINTPMT']
     times['DELTAT_TRIG_VS_SCINTAND'] = times['T_TRIG'] - times['T_SCINTAND']
     times['DELTAT_TRIG_VS_SCINTPMT'] = times['T_TRIG'] - times['T_SCINTPMT']
+    times['DELTAT_REFIT_VS_SCINTAND'] = times['T_REFIT'] - times['T_SCINTAND']
+    times['DELTAT_REFIT_VS_SCINTPMT'] = times['T_REFIT'] - times['T_SCINTPMT']
+    times['DELTAT_REFIT_VS_TRIG'] = times['T_REFIT'] - times['T_TRIG']
     
     times['TIMEMIN'] = ( (times['ORBIT'] - times['ORBIT'].min()) * DURATION['orbit'] * 1.e-9 / 60 ).astype(int) # Absolute time from the start of the run in minutes
     rate = times.groupby('TIMEMIN')[['T_TRIG', 'T_SCINTAND', 'T_SCINTEXT', 'T_SCINTINT', 'T_SCINTPMT']].count()
@@ -1274,7 +1355,7 @@ def plotTimes():
     fig.savefig(args.outputdir + runname + "_plots/times/delta_scint.pdf")
     plt.close(fig)
     
-    # Difference between trigger and global fit
+    # Difference between trigger and scintillators
     fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(20, 10))
     
     plotHist(axs[0], data=times['DELTAT_TRIG_VS_SCINTAND'].dropna(), name="Time $\Delta$ between trigger and SiPM scintillators", title="$t_{trigger} - t_{SiPM}$", unit="ns", bins=np.arange(-200, 100, 10.), label="""$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
@@ -1283,6 +1364,38 @@ def plotTimes():
     fig.tight_layout()
     fig.savefig(args.outputdir + runname + "_plots/times/delta_triggers.png")
     fig.savefig(args.outputdir + runname + "_plots/times/delta_triggers.pdf")
+    plt.close(fig)
+    
+    # Difference between global fit and triggers and scintillators
+    fig, axs = plt.subplots(nrows=1, ncols=3, figsize=(30, 10))
+    
+    plotHist(axs[0], data=times['DELTAT_REFIT_VS_SCINTAND'].dropna(), name="Time $\Delta$ between fitted T0 and SiPM scintillators", title="$t_{fit} - t_{SiPM}$", unit="ns", bins=np.arange(-100, 100, 2), label="""$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    plotHist(axs[1], data=times['DELTAT_REFIT_VS_SCINTPMT'].dropna(), name="Time $\Delta$ between fitted T0 and PMT scintillators", title="$t_{fit} - t_{PMT}$", unit="ns", bins=np.arange(-100, 100, 2), label="""$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    plotHist(axs[2], data=times['DELTAT_REFIT_VS_TRIG'].dropna(), name="Time $\Delta$ between fitted T0 and trigger", title="$t_{fit} - t_{trigger}$", unit="ns", bins=np.arange(-100, 100, 2), label="""$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$""", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/times/delta_refit.png")
+    fig.savefig(args.outputdir + runname + "_plots/times/delta_refit.pdf")
+    plt.close(fig)
+    
+    # Segment refit
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(20, 15))
+    for idx, chamber in zip(iax, isl):
+        for num_hits in [0, 3, 4]:
+            pars = plotHist(axs[idx], data=nhits[num_hits].loc[nhits[num_hits]['CHAMBER'] == chamber, 'DELTAT_REFIT_VS_SCINTPMT'], name="Refit $\Delta t$ [SL %d]" % (chamber), title="$\Delta t$", unit="ns", bins=np.arange(-100, 100, 2.), label="""{},\n$\sigma=%.2f\,%s$""".format("%d/4" % num_hits if num_hits else "3/4 + 4/4"), linecolor=colors[num_hits], markercolor=colors[num_hits], markerstyle=markers[num_hits])
+            if num_hits == 0: print("Time calibration CHAMBER %d:\t%.1f ns" % (chamber, pars[1]))
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/times/delta_refit_chamber.png")
+    fig.savefig(args.outputdir + runname + "_plots/times/delta_refit_chamber.pdf")
+    plt.close(fig)
+    
+    fig, axs = plt.subplots(nrows=4, ncols=4, figsize=(40, 30))
+    for chamber in range(4):
+        for layer in range(4):
+            pars = plotHist(axs[-chamber-1][layer], data=hits.loc[(hits['CHAMBER'] == chamber) & (hits['LAYER'] == layer+1), 'DELTAT_REFIT_VS_SCINTPMT'], name="Refit $\Delta t$ [SL %d, LAYER %d]" % (chamber, layer+1), title="$\Delta t$", unit="ns", bins=np.arange(-100, 100, 2.), label="$x_0=%.2f\,%s$,\n$\sigma=%.2f\,%s$", linecolor=colors[0], markercolor=colors[0], markerstyle=markers[0])
+    fig.tight_layout()
+    fig.savefig(args.outputdir + runname + "_plots/times/delta_refit_chamber_layer.png")
+    fig.savefig(args.outputdir + runname + "_plots/times/delta_refit_chamber_layer.pdf")
     plt.close(fig)
     
     '''
@@ -1322,7 +1435,7 @@ if 'residues' in args.plot or args.all: plotResidues()
 #if 'res2D' in args.plot or args.all: plotResidues2D()
 if 'resolution' in args.plot or args.all: plotResolution()
 if 'tappini' in args.plot or args.all: plotTappini()
-if 'missinghits' in args.plot or args.all: plotMissinghits()
+if 'efficiency' in args.plot or args.all: plotEfficiency()
 if 'occupancy' in args.plot or args.all: plotOccupancy()
 if 'parameters' in args.plot or args.all: plotParameters()
 if 'alignment' in args.plot: plotAlignment()
