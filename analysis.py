@@ -22,6 +22,7 @@ parser.add_argument("-i", "--inputfile", nargs='+', dest="filenames", default="d
 parser.add_argument("-o", "--outputdir", action="store", type=str, dest="outputdir", default="output/", help="Specify output directory, if empty no csv output is produced")
 parser.add_argument("-m", "--max", action="store", type=int, default=-1, dest="max", help="Maximum number of words to be read")
 parser.add_argument("--noreco", action="store_true", default=False, dest="noreco", help="Do not run reconstruction")
+parser.add_argument("--nosave", action="store_true", default=False, dest="nosave", help="Do not save output")
 parser.add_argument("-p", "--parallel", action="store_true", default=False, dest="parallel", help="Enable CPU parallelization")
 parser.add_argument("-t", "--tzero", action="store", type=str, default=False, dest="tzero", help="Specify the algorithm to be used to determine the T0. M : meantimer, T : HT trigger, S : SiPM scintillators, P : PMT scintillators, R : scintillators + time refit")
 parser.add_argument("-s", "--suffix", action="store", type=str, default="", dest="suffix", help="Specify the suffix of the output files")
@@ -175,7 +176,7 @@ def recoSegments(hitlist):
         seg_layer, seg_wire, seg_bx, seg_label, seg_idx = lrcomb['LAYER'].values, lrcomb['WIRE'].values, lrcomb['BX'].values, lrcomb['X_LABEL'].values, lrcomb.index
         m, q, chi2 = fitFast(posx.to_numpy(), posz.to_numpy())
         #m, q, chi2, dx = fit3D(posx.to_numpy(), posz.to_numpy(), posl.to_numpy())
-        if chi2 < config.FIT_CHI2NDF_MAX and abs(m) > config.FIT_M_MIN: fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "nhits" : len(seg_idx), "pars" : [m, q], "idx" : seg_idx})
+        if chi2 < config.FIT_CHI2NDF_MAX and abs(m) < config.FIT_M_MAX: fitResults.append({"chi2" : chi2, "label" : seg_label, "layer" : seg_layer, "wire" : seg_wire, "bx" : seg_bx, "nhits" : len(seg_idx), "pars" : [m, q], "idx" : seg_idx})
         
     fitResults.sort(key=lambda x: x["chi2"])
 
@@ -192,7 +193,7 @@ def recoSegments(hitlist):
         # Write results to dataframe
         segments = segments.append(pd.DataFrame.from_dict({'VIEW' : ['0'], 'ORBIT' : [iorbit], 'CHAMBER' : [(isl)], 'NHITS' : [f_nhits], 'M' : [f_m], 'SIGMAM' : [np.nan], 'Q' : [f_q], 'SIGMAQ' : [np.nan], 'CHI2' : [f_chi2], 'HIT_INDEX' : [seg_idx], 'T0' : [itime], 'T_REFIT' : [itime + f_dt], 'T_SCINTPMT' : [itimePMT], 'T_SCINTAND' : [itimeAND]}), ignore_index=True)
         for ilabel, ilayer, iwire, ibx in zip(fitResults[0]["label"], fitResults[0]["layer"], fitResults[0]["wire"], fitResults[0]["bx"]):
-            x_seg = (lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] - fitResults[0]["pars"][1]) / fitResults[0]["pars"][0]
+            x_seg = lrhits.loc[(lrhits['BX'] == ibx) & (lrhits['LAYER'] == ilayer) & (lrhits['WIRE'] == iwire) & (lrhits['X_LABEL'] == ilabel), 'Z'].values[0] * fitResults[0]["pars"][0] + fitResults[0]["pars"][1]
             hitlist.loc[(hitlist['ORBIT'] == iorbit) & (hitlist['BX'] == ibx) & (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer) & (hitlist['WIRE'] == iwire), ['X_LABEL', 'X_SEG', 'X_SEGFITSHIFT', 'T_REFIT']] = ilabel, x_seg, f_dx, itime + f_dt
 
         # Missing hit interpolation
@@ -200,7 +201,7 @@ def recoSegments(hitlist):
             layers = list(hitlist['LAYER'])
             m_layer = [x for x in np.arange(1, 4+1) if not x in layers][0]
             m_zhit = mapconverter.getZlayer(m_layer)
-            m_xhit = (m_zhit - fitResults[0]["pars"][1]) / fitResults[0]["pars"][0]
+            m_xhit =  m_zhit * fitResults[0]["pars"][0] + fitResults[0]["pars"][1]
             m_wire_num = mapconverter.getWireNumber(m_xhit, m_layer)
             missinghits = missinghits.append(pd.DataFrame.from_dict({'ORBIT' : [iorbit], 'BX' : [np.nan], 'CHAMBER' : [isl], 'LAYER' : [m_layer], 'WIRE' : [m_wire_num], 'X' : [m_xhit], 'Y' : [0.], 'Z' : [m_zhit]}), ignore_index=True)
     
@@ -241,7 +242,7 @@ def recoTracks(hitlist):
             else:
                 m, q, chi2 = fitFast(posxy.to_numpy(), posz.to_numpy())
             
-            if chi2 < config.FIT_GLOBAL_CHI2NDF_MAX and abs(m) > config.FIT_M_MIN:
+            if chi2 < config.FIT_GLOBAL_CHI2NDF_MAX and abs(m) < config.FIT_M_MAX:
                 segments = segments.append(pd.DataFrame.from_dict({'VIEW' : [view.upper()], 'ORBIT' : [iorbit], 'CHAMBER' : [','.join([str(x) for x in sl_idx])], 'NHITS' : [nhits], 'M' : [m], 'SIGMAM' : [np.nan], 'Q' : [q], 'SIGMAQ' : [np.nan], 'CHI2' : [chi2], 'HIT_INDEX': [list(viewhits.index)], 'T0' : [itime + f_dt], 'T_REFIT' : [itime + f_dt], 'T_SCINTPMT' : [itimePMT], 'T_SCINTAND' : [itimeAND]}), ignore_index=True)
                 hitlist['NHITS_TRACK'] = nhits
                 
@@ -251,7 +252,7 @@ def recoTracks(hitlist):
                         for ilayer in range(1, 4+1):
                             mask = (hitlist['CHAMBER'] == isl) & (hitlist['LAYER'] == ilayer)
                             hitlist.loc[mask, ['X_TRACK_GLOB', 'Y_TRACK_GLOB']] = np.array([0., 0.])
-                            hitlist.loc[mask, view[0].upper() + '_TRACK_GLOB'] = (hitlist.loc[mask, view[1].upper() + '_GLOB'].values - q) / m
+                            hitlist.loc[mask, view[0].upper() + '_TRACK_GLOB'] = m * hitlist.loc[mask, view[1].upper() + '_GLOB'].values + q
                                 
         # Update positions according to new refitted time
         hitlist.loc[hitlist['X_LABEL'] == 1, view[0].upper() + '_GLOB'] = hitlist[view[0].upper() + '_GLOB'] - hitlist[view[0].upper() + '_TRKFITSHIFT']
@@ -335,7 +336,7 @@ if len(df) == 0:
     print("Empty dataframe, exiting...")
     exit()
 
-if args.verbose >= 2: print("DF:\n", df.head(50))
+if args.verbose >= 2: print("DF:\n", df.head(50), "\n")
 
 ### Split dataframes according to their content
 triggers = df[(df['HEAD'] == 4) | (df['HEAD'] == 5)].copy() # Trigger parameters
@@ -353,7 +354,7 @@ mapconverter = Mapping()
 df = mapconverter.virtex7(df)
 #df = mapconverter.virtex7obdt(df)
 
-if args.verbose >= 2: print("DF:\n", df.head(50))
+if args.verbose >= 2: print("DF:\n", df.head(50), "\n")
 
 # Save occupancy numbers before any further selection
 occupancy = df.groupby(['SL', 'LAYER', 'WIRE_NUM'])['HEAD'].count() # count performed a random column
@@ -361,7 +362,7 @@ occupancy = occupancy.reset_index().rename(columns={'HEAD' : 'COUNTS'}) # reset 
 occupancy['RATE'] = occupancy['COUNTS'] / runTime
 
 if args.verbose >= 2:
-    print("Occupancy:\n", occupancy.head(10))
+    print("Occupancy:\n", occupancy.head(10), "\n")
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Channel mapping completed")
 
@@ -378,14 +379,15 @@ triggers.loc[triggers['HEAD'] == 4, 'M'] = triggers[triggers['HEAD'] == 4]['TDC_
 triggers.loc[triggers['HEAD'] == 5, 'Q'] = triggers[triggers['HEAD'] == 5]['TDC_MEAS']
 triggers[['M', 'Q']] = triggers.groupby('ORBIT_CNT')[['M', 'Q']].transform(np.max)
 triggers = triggers.drop_duplicates(subset=['ORBIT_CNT', 'M', 'Q'], keep='first')
-# Adopt common parameters notation
-triggers['M'] = 1. / triggers['M']
-triggers['Q'] = - triggers['M'] * (triggers['Q'] + XCELL * (triggers['TDC_CHANNEL'] % 5 - 2 + config.TRIGGER_CELL_OFFSET))
+# Add macrocell offset
+triggers['X0'] = - triggers['Q'] / triggers['M'] # local q coordinate in the standard x-z reference frame
+triggers[['X0_GLOB', 'Q_GLOB']] = [np.nan, np.nan]
+#triggers['Q'] = triggers['Q'] #+ XCELL * (triggers['TDC_CHANNEL'] % 5 - 2 + config.TRIGGER_CELL_OFFSET)
 # Proper trigger dataframe formatting
 triggers = triggers.rename(columns={'ORBIT_CNT' : 'ORBIT'})
 triggers[['VIEW', 'NHITS', 'SIGMAM', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0']] = [config.PHI_VIEW.upper(), np.nan, np.nan, np.nan, np.nan, np.nan, np.nan]
-triggers = triggers[['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0']]
-if args.verbose >= 2: print("Triggers:\n", triggers.head(50))
+triggers = triggers[['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'Q_GLOB', 'X0', 'X0_GLOB', 'CHI2', 'HIT_INDEX', 'T0']]
+if args.verbose >= 2: print("Triggers:\n", triggers.head(50), "\n")
 
 # remove double hits
 ##df['TDC_MEAS'] = df.groupby(['HEAD', 'FPGA', 'ORBIT_CNT', 'TDC_CHANNEL'])['TDC_MEAS'].transform(np.max)
@@ -508,7 +510,7 @@ hits['X_RIGHT'] = hits['WIRE_POS'] + hits['X_DRIFT']
 # Cosmetic changes to be compliant with common format
 hits.rename(columns={'ORBIT_CNT': 'ORBIT', 'BX_COUNTER': 'BX', 'SL' : 'CHAMBER', 'WIRE_NUM' : 'WIRE', 'Z_POS' : 'Z', 'WIRE_POS' : 'X_WIRE', 'TDRIFT' : 'TIMENS'}, inplace=True)
 
-if args.verbose >= 2: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
+#if args.verbose >= 2: print(hits[hits['TDC_CHANNEL'] >= -128].head(50))
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Cleaning completed")
 
@@ -523,10 +525,12 @@ events[['X', 'X_SEG', 'X_TRACK']] = [np.nan, np.nan, np.nan]
 events[['X_TRACK_GLOB', 'Y_TRACK_GLOB']] = [np.nan, np.nan]
 events[['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = [np.nan, np.nan, np.nan]
 
+missinghits = pd.DataFrame(columns=['ORBIT', 'BX', 'CHAMBER', 'LAYER', 'WIRE', 'X', 'Y', 'Z'])
+
 # Add number of tappino (c)
 #mapconverter.addTappinoNum(events)
 
-missinghits = pd.DataFrame(columns=['ORBIT', 'BX', 'CHAMBER', 'LAYER', 'WIRE', 'X', 'Y', 'Z'])
+# Segments reference frame is not the usual x-z frame, instead the angle is measured from the vertical, rotation clockwise is +, anticlockwise is -
 segments = pd.DataFrame(columns=['VIEW', 'ORBIT', 'CHAMBER', 'NHITS', 'M', 'SIGMAM', 'Q', 'SIGMAQ', 'CHI2', 'HIT_INDEX', 'T0', 'T_REFIT', 'T_SCINTAND', 'T_SCINTPMT'])
 
 # Reconstruction
@@ -573,9 +577,15 @@ for iSL, sl in SLs.items():
     events.loc[slmask, ['X_LEFT_GLOB', 'Y_LEFT_GLOB', 'Z_LEFT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_LEFT', 'Y', 'Z']].values)
     events.loc[slmask, ['X_RIGHT_GLOB', 'Y_RIGHT_GLOB', 'Z_RIGHT_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_RIGHT', 'Y', 'Z']].values)
     events.loc[slmask, ['X_WIRE_GLOB', 'Y_WIRE_GLOB', 'Z_WIRE_GLOB']] = sl.coor_to_global(events.loc[slmask, ['X_WIRE', 'Y', 'Z']].values)
-    #if len(missinghits) > 0:
+    # missing hits
     slmask = missinghits['CHAMBER'] == iSL
     missinghits.loc[slmask, ['X_GLOB', 'Y_GLOB', 'Z_GLOB']] = sl.coor_to_global(missinghits.loc[slmask, ['X', 'Y', 'Z']].values)
+    # triggers
+    trmask = triggers['CHAMBER'] == iSL
+    ntrmask = len(triggers[trmask])
+    triggers.loc[trmask, 'X0_GLOB'] = sl.coor_to_global(np.vstack((np.zeros(ntrmask), np.zeros(ntrmask), triggers.loc[trmask, 'X0'])).T)[:,2] # transform to global standard reference frame
+# Transform back to segment reference frame
+triggers['Q_GLOB'] = -triggers['M'] * triggers['X0_GLOB']
 
 
 if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Reconstructing tracks")
@@ -615,40 +625,43 @@ if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Reconstruction co
 
 # Get trigger dict for M and Q and add them to segments
 trigger_m_map = dict(triggers.loc[triggers['M'].notna(), ['ORBIT', 'M']].to_records(index=False))
-trigger_q_map = dict(triggers.loc[triggers['Q'].notna(), ['ORBIT', 'Q']].to_records(index=False))
+trigger_qloc_map = dict(triggers.loc[triggers['Q'].notna(), ['ORBIT', 'Q']].to_records(index=False))
+trigger_qglo_map = dict(triggers.loc[triggers['Q_GLOB'].notna(), ['ORBIT', 'Q_GLOB']].to_records(index=False))
 # Add trigger time, m, q to segments
 segments['T_TRIG'] = segments['ORBIT'].map(trigger_time_map)
 segments['M_TRIG'] = segments['ORBIT'].map(trigger_m_map)
-segments['Q_TRIG'] = segments['ORBIT'].map(trigger_q_map)
+segments['Q_TRIG'] = segments['ORBIT'].map(trigger_qloc_map)
+segments['Q_TRIG_GLOB'] = segments['ORBIT'].map(trigger_qglo_map)
 
 # Use the convention where 0 is vertical
 triggers['M_RAD'] = np.arctan(triggers['M'])
 segments['M_RAD'] = np.arctan(segments['M'])
 segments['M_TRIG_RAD'] = np.arctan(segments['M_TRIG'])
 
-triggers['M_RAD'] = np.where(triggers['M_RAD'] < 0, triggers['M_RAD'] + math.pi/2., triggers['M_RAD'] - math.pi/2.)
-segments['M_RAD'] = np.where(segments['M_RAD'] < 0, segments['M_RAD'] + math.pi/2., segments['M_RAD'] - math.pi/2.)
-segments['M_TRIG_RAD'] = np.where(segments['M_TRIG_RAD'] < 0, segments['M_TRIG_RAD'] + math.pi/2., segments['M_TRIG_RAD'] - math.pi/2.)
+#triggers['M_RAD'] = np.where(triggers['M_RAD'] < 0, triggers['M_RAD'] + math.pi/2., triggers['M_RAD'] - math.pi/2.)
+#segments['M_RAD'] = np.where(segments['M_RAD'] < 0, segments['M_RAD'] + math.pi/2., segments['M_RAD'] - math.pi/2.)
+#segments['M_TRIG_RAD'] = np.where(segments['M_TRIG_RAD'] < 0, segments['M_TRIG_RAD'] + math.pi/2., segments['M_TRIG_RAD'] - math.pi/2.)
 
 triggers['M_DEG'] = np.degrees(triggers['M_RAD'])
 segments['M_DEG'] = np.degrees(segments['M_RAD'])
 segments['M_TRIG_DEG'] = np.degrees(segments['M_TRIG_RAD'])
 
-triggers['X0'] = - triggers['Q'] / triggers['M']
-segments['X0'] = - segments['Q'] / segments['M']
-segments['X0_TRIG'] = - segments['Q_TRIG'] / segments['M_TRIG']
+#triggers['X0'] = - triggers['Q'] / triggers['M']
+#segments['X0'] = - segments['Q'] / segments['M']
+#segments['X0_TRIG'] = - segments['Q_TRIG'] / segments['M_TRIG']
 
 ################################################## PART 7: Write output
 
 if args.verbose >= 2:
-    print(events.head(50))
-    print(missinghits.tail(10))
-    print(segments.head(10))
-    print(segments.tail(10))
-    print(triggers.head(10))
+    print("Events:\n", events.head(50), "\n")
+    print("Missing hits:\n", missinghits.head(10), "\n")
+    print("Segments head:\n", segments.head(10), "\n")
+    print("Segments tail:\n", segments.tail(10), "\n")
+    print("Times:\n", times.head(10), "\n")
+    print("Triggers:\n", triggers.head(10), "\n")
 
 # Output to csv files
-if len(args.outputdir) > 0:
+if len(args.outputdir) > 0 and not args.nosave:
     events.to_csv(args.outputdir + runname + "_csv/events" + args.suffix + ".csv", header=True, index=False)
     missinghits.to_csv(args.outputdir + runname + "_csv/missinghits" + args.suffix + ".csv", header=True, index=False)
     segments.to_csv(args.outputdir + runname + "_csv/segments" + args.suffix + ".csv", header=True, index=False)
@@ -656,7 +669,6 @@ if len(args.outputdir) > 0:
     occupancy.to_csv(args.outputdir + runname + "_csv/occupancy" + args.suffix + ".csv", header=True, index=False)
     times.to_csv(args.outputdir + runname + "_csv/times" + args.suffix + ".csv", header=True, index=False)
     
-
     if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Output files saved in directory", args.outputdir + runname + "_csv/")
 else:
     if args.verbose >= 1: print("[", datetime.now() - itime, "]", "Output directory not specified, no file saved")
@@ -696,16 +708,16 @@ for orbit, hitlist in evs:
         for index, seg in segsl.iterrows():
             #col = config.TRACK_COLORS[iR]
             segz = [G.SL_FRAME['b'], G.SL_FRAME['t']]
-            segx = [((z - seg['Q']) / seg['M']) for z in segz]
+            segx = [z * seg['M'] + seg['Q'] for z in segz]
             figs['sl'][iSL].line(x=np.array(segx), y=np.array(segz), line_color='black', line_alpha=0.7, line_width=3)
 
         # Triggers
-        trisl = triggers[(triggers['ORBIT'] == orbit) & (triggers['CHAMBER'] == str(iSL))]
+        trisl = triggers[(triggers['ORBIT'] == orbit) & (triggers['CHAMBER'] == iSL)]
         if len(trisl) <= 0: continue
         for index, tri in trisl.iterrows():
             #col = config.TRACK_COLORS[iR]
             triz = [G.SL_FRAME['b'], G.SL_FRAME['t']]
-            trix = [((z - tri['Q']) / tri['M']) for z in triz]
+            trix = [z * tri['M'] + tri['Q'] for z in triz]
             figs['sl'][iSL].line(x=np.array(trix), y=np.array(triz), line_color='magenta', line_alpha=0.7, line_width=3)
 
 
@@ -724,7 +736,7 @@ for orbit, hitlist in evs:
         tracks = segments[(segments['VIEW'] == view.upper()) & (segments['ORBIT'] == orbit) & (segments['CHAMBER'].str.len() > (1 if len(sls) > 1 else 0))]
         for index, trk in tracks.iterrows():
             trkz = [config.PLOT_RANGE['y'][0] + 1, config.PLOT_RANGE['y'][1] - 1]
-            trkxy = [((z - trk['Q']) / trk['M']) for z in trkz]
+            trkxy = [z * trk['M'] + trk['Q'] for z in trkz]
             figs['global'][view].line(x=np.array(trkxy), y=np.array(trkz), line_color='black', line_alpha=0.7, line_width=3)
 
         # Segments
@@ -732,15 +744,17 @@ for orbit, hitlist in evs:
             segsl = segments[(segments['VIEW'] == view.upper()) & (segments['ORBIT'] == orbit) & (segments['CHAMBER'] == str(isl))]
             for index, seg in segsl.iterrows():
                 segz = [config.PLOT_RANGE['y'][0] + 1, config.PLOT_RANGE['y'][1] - 1]
-                segx = [((z - seg['Q']) / seg['M']) for z in segz]
+                segx = [z * seg['M'] + seg['Q'] for z in segz]
                 figs['global'][view].line(x=np.array(segx), y=np.array(segz), line_color='gray', line_alpha=0.3, line_width=2, line_dash='dashed')
 
         # Triggers
         trigs = triggers[(triggers['ORBIT'] == orbit) & (triggers['VIEW'] == view.upper())]
         for index, tri in trigs.iterrows():
-            q_global = sls[ sl_ids.index(tri['CHAMBER']) ].coor_to_global(np.array([[0., 0., tri['Q']]]))[0][2]
+            #q_local = - tri['Q'] / tri['M'] # local q coordinate in the standard x-z reference frame
+            #q_global = sls[ sl_ids.index(tri['CHAMBER']) ].coor_to_global(np.array([[0., 0., q_local]]))[0][2] # transform to global standard reference frame
+            #q_global = -tri['M'] * q_global # transform back to segment reference frame
             triz = [config.PLOT_RANGE['y'][0] + 1, config.PLOT_RANGE['y'][1] - 1]
-            trixy = [((z - q_global) / tri['M']) for z in triz]
+            trixy = [z * tri['M'] + tri['Q_GLOB'] for z in triz]
             figs['global'][view].line(x=np.array(trixy), y=np.array(triz), line_color='magenta', line_alpha=0.7, line_width=3)
 
 
